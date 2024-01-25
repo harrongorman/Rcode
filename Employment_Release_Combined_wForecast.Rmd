@@ -1,0 +1,3654 @@
+---
+title: "Visualizing the Current Employment Situation Release"
+author: "John Gorman and Paul Romero"
+date: "`r format(Sys.Date(), '%B %e, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    theme: readable
+urlcolor: blue
+linkcolor: blue
+fontsize: 12pt
+---
+
+```{r setup SHARED, include=FALSE}
+#Establishing global settings for all code chunks
+knitr::opts_chunk$set(echo = TRUE, 
+                      include = T, 
+                      warning = F, 
+                      message = F,
+                      fig.height = 4.5,
+                      out.width = "100%")
+
+#R libraries used for project
+library(dplyr)
+library(vroom)
+library(stringr)
+library(tidyr)
+library(forcats)
+library(lubridate)
+library(crstools)
+library(ggtext)
+library(DT) #for the interactive tables
+library(plotly)
+library(tibble)
+library(lubridate)
+library(crosstalk) #for grouped data in spaghetti charts
+library(grid) #for facet spacing
+library(htmlwidgets) # for forecast selection
+library(shiny) # for forecast selection
+library(knitr)
+library(forecast)
+#library(crosstalk) # for forecast selection
+
+#Setting up working directory 
+setwd('S:/TEAMS/POVERTYETC/COVID Unemployment Situation Visualizations/Data Work')
+
+#Scalars for visual elements of plots
+fontsize <- 3
+pointsize <- 1
+linewidth <- 0.75
+
+#Data
+
+##The data base
+file <- vroom('Data/working_bls_dataset.csv')
+
+```
+
+```{r setup JOHN, include=FALSE}
+#Establishing global settings for all code chunks
+knitr::opts_chunk$set(echo = F, 
+                      include = T, 
+                      warning = F, 
+                      message = F,
+                      fig.height = 4.5,
+                      out.width = "100%")
+
+#R libraries used for project
+library(dplyr)
+library(vroom)
+library(stringr)
+library(tidyr)
+library(forcats)
+library(crstools)
+library(ggtext)
+library(DT) #for the interactive tables
+library(plotly)
+library(lubridate)
+
+#Setting up working directory 
+setwd('S:/TEAMS/POVERTYETC/COVID Unemployment Situation Visualizations/Data Work')
+
+#Scalars for visual elements of plots
+fontsize <- 3
+pointsize <- 1
+linewidth <- 0.75
+
+#The data base
+file <- vroom('Data/working_bls_dataset.csv')
+
+# Total Levels Database
+
+totals_byyear = file %>% filter(VarName %in% c("(Seas) Civilian Labor Force Level",
+                                             "(Seas) Employment Level",
+                                             "(Seas) Unemployment Level",
+                                             "(Seas) Not in Labor Force")) %>%
+  
+                mutate(vartype = ifelse(grepl("Civilian Labor Force" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in Labor Force" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level")))) %>%
+                rename("totalvalue" = "value")
+
+
+totals_byyear_notseas = file %>% filter(VarName %in% c("(Unadj) Civilian Labor Force Level",
+                                             "(Unadj) Employment Level",
+                                             "(Unadj) Unemployment Level",
+                                             "(Unadj) Not in Labor Force")) %>%
+  
+                mutate(vartype = ifelse(grepl("Civilian Labor Force" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in Labor Force" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level")))) %>%
+                rename("totalvalue" = "value")
+
+
+#Functions for plots 
+
+addtracecontrol = function(title, object, varname, colorfunction, variable_pub_name){
+  
+  add_trace(p = object, data = file %>%
+                    filter(VarName == varname) %>%
+                    arrange(date) %>%
+                    mutate(Change =lead(value,0) - lag(value,1)),
+            x = ~date,
+            y = ~value,
+            name = variable_pub_name,
+            line = list(color = colorfunction),
+            type = 'scatter',
+            mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>', variable_pub_name, '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Value</b>: ', formatC(value,big.mark=',', format='g'), '% <br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'), 'ppt')) 
+}
+
+addtracecontrol_nopercent = function(title, object, varname, colorfunction, variable_pub_name){
+  
+  add_trace(p = object, data = file %>%
+                    filter(VarName == varname) %>%
+                    arrange(date) %>%
+                    mutate(Change =lead(value,0) - lag(value,1)) %>%
+                             mutate(value = value * 1000),
+            x = ~date,
+            y = ~value,
+            name = variable_pub_name,
+            line = list(color = colorfunction),
+            type = 'scatter',
+            mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>', variable_pub_name, '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Value</b>: ', formatC(value,big.mark=',', format='d'), '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'd'), ',000')) 
+}
+
+#Functions for cleaning data
+
+
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+file_share_2_arrrangedata = function(file_share_2_input){
+              file_share_2_input %>%
+              left_join(totals_byyear, by = c("date", "vartype")) %>%
+              rename_at(
+                vars(ends_with(".x")),
+                ~str_replace(., "\\..$","")
+              ) %>% 
+              select_at(
+                vars(-ends_with(".y"))
+              ) %>%
+              group_by(year, period, breakdown_col) %>%
+              mutate(Share = value/totalvalue) %>%
+              ungroup() %>%
+              mutate(Share = round(Share * 100, 2)) %>%
+              ungroup() %>%
+              mutate(Change =lead(Share,0) - lag(Share,1)) %>%
+              mutate(Changevalue = lead(value,0) - lag(value,1)) %>%
+              arrange(date)
+}
+
+
+file_share_2_arrrangedata_notseas = function(file_share_2_input){
+              file_share_2_input %>%
+              left_join(totals_byyear_notseas, by = c("date", "vartype")) %>%
+              rename_at(
+                vars(ends_with(".x")),
+                ~str_replace(., "\\..$","")
+              ) %>% 
+              select_at(
+                vars(-ends_with(".y"))
+              ) %>%
+              group_by(year, period, breakdown_col) %>%
+              mutate(Share = value/totalvalue) %>%
+              ungroup() %>%
+              mutate(Share = round(Share * 100, 2)) %>%
+              ungroup() %>%
+              mutate(Change = lead(Share,0) - lag(Share,1)) %>%
+              mutate(Changevalue = lead(value,0) - lag(value,1)) %>%
+              arrange(date)
+}
+
+
+##Creating recession bars for plotly charts (any more recent recessions will need to be added!)
+get_rec_bars <- function(ymin,ymax){
+  
+  reclist <- list(list(type = "rect",
+                       line = list(color = 'white'),
+                       fillcolor = "grey", opacity = 0.15,
+                       x0 = "2007-12-01", x1 = "2009-06-01", xref = "x",
+                       y0 = ymin, y1 = ymax, yref = "y"),
+                  list(type = "rect",
+                       line = list(color = 'white'),
+                       fillcolor = "grey", opacity = 0.15,
+                       x0 = "2020-02-01", x1 = "2020-04-01", xref = "x",
+                       y0 = ymin, y1 = ymax, yref = "y"))
+  
+  return(reclist)
+  
+}
+
+###
+
+find_latest_value = function(seriescode) {
+  
+  file2 = file %>%
+    filter(seriesID == seriescode)
+  
+max_date_of_variable = max(file2$date)
+
+value_out = file2$value[which(file2$date == max_date_of_variable)]
+  
+  return(value_out)
+}
+
+
+
+
+#
+
+find_latest_date = function(seriescode) {
+  
+    file2 = file %>%
+    filter(seriesID == seriescode)
+  
+date_out_unformatted = max(file2$date)
+
+date_out = paste0(months(date_out_unformatted), " "  , day(date_out_unformatted)   , ", ", year(date_out_unformatted))
+  
+  return(date_out)
+  
+}
+
+
+
+
+###### most changing
+
+start_comp_date = "2020-1-1"
+
+change_since = function(startdate, listofseries, type) {
+
+  startdate =ymd(startdate)
+  date_out_unformatted = startdate
+
+date_out = paste0(months(date_out_unformatted), " "  , day(date_out_unformatted)   , ", ", year(date_out_unformatted))
+  
+if(type == "share") {
+  file2 = file %>% mutate(breakdown_col = sub(".* - ", "", VarName)) %>%
+                mutate(vartype = ifelse(grepl("Civilian Labor Force" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in Labor Force" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level"))))
+  
+  file2 = file_share_2_arrrangedata_notseas(file2)
+  
+} else if (type == "share_seas") {
+    file2 = file %>% mutate(breakdown_col = sub(".* - ", "", VarName)) %>%
+                              mutate(vartype = ifelse(grepl("Civilian Labor Force" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in Labor Force" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level")))) 
+  file2 = file_share_2_arrrangedata(file2)
+  
+} else {
+  file2 = file
+}
+
+ file2 = file2 %>%
+    filter(seriesID %in% listofseries) %>%
+   filter(as.numeric(date) >= as.numeric(startdate)) %>%
+  group_by(VarName) %>%
+   arrange(date) 
+
+ 
+ if(type %in% c("share", "share_seas")) {
+    file2 = file2 %>%
+      summarize(change = last(Share)/first(Share),
+                td = last(Share),
+                ten = first(Share))
+ } else {
+    file2 = file2 %>%
+      summarize(change = last(value)/first(value),
+                td = last(value),
+                ten = first(value))
+ }
+ 
+ 
+file2$select = abs(file2$change - 1)
+
+max = max(file2$select)
+
+namedf = file2 %>%
+  filter(select == max)
+
+percent =namedf$change[1]
+
+if(percent > 1) {
+  sign = "increased"
+} else {
+  sign = "decreased"
+}
+
+if(percent < 1) {
+  percent = paste0(round((percent-1)*100, 2), '%')
+} else {
+  percent = paste0(round((percent-1)*100, 2), '%')
+}
+
+if(length(listofseries) > 1) {
+  most = paste0(" the most (", percent, ").") 
+} else {
+  most = paste0(" ", sub("-","",percent), ".")
+}
+  
+name = namedf[1]
+
+if(grepl('-', name, fixed = TRUE)) {
+  flagsingle = 1
+} else {
+  flagsingle = 0 
+}
+
+varbase = gsub(".*) (.+) -.*", "\\1", name)
+singlename = sub(".*)", "", name)
+name = gsub(".*-", "\\1", name)
+name = sub("\\,.*", "", name)
+
+
+if (substrRight(name, 1) == 'n') {
+  name = name
+  
+} else if (substrRight(name, 8) == 'Industry') {
+  name = name
+  
+} else if(substrRight(name, 1) != 's') {
+  name = paste0(name, 's')
+} 
+
+
+ if(type %in% c("share", "share_seas")) {
+    return(paste0("Since ", date_out, ", the ", varbase, " share for", name, " has ", sign, most))
+ } else if (length(listofseries) > 1 | flagsingle == 1) {
+    return(paste0("Since ", date_out, ", the ", varbase, " for", name, " has ", sign, most))
+ } else {
+   return(paste0("Since ", date_out, ", the ", singlename, " has ", sign, most))
+ }
+
+}
+
+
+##change_since(start_comp_date, c('LNS14100000', 'LNS14200000'), "normal")
+
+## temp = change_since(start_comp_date, occ_list , "share")
+
+## temp2 = change_since(start_comp_date, c('LNS11000003', 'LNS12000003', 'LNS13000003', 'LNS11000006', 'LNS12000006', 'LNS13000006', 'LNS15000006', 'LNS11032183', ##'LNS12032183', 'LNS13032183', 'LNS15032183', 'LNS15000003'), "share_seas")
+
+###temp = change_since(start_comp_date, c('LNS13026638', 'LNS13026637') , "normal")
+
+```
+
+```{r setup PAUL, include = FALSE}
+
+#Functions for cleaning data
+
+##Creating "expected" value for CES plots
+data_ces_expected <- function(.data,groupflag){
+  
+  if(groupflag == TRUE){
+    
+    groupvals <- unique(.data[,'VarName'])$VarName
+    
+    master <- list()
+    
+    for(i in 1:length(groupvals)){
+      
+      df1 <- .data %>% 
+        filter(VarName == groupvals[i]) %>% 
+        arrange(date) %>% 
+        mutate(xvar = row_number()) %>% 
+        select(date,VarName,value,xvar)
+      
+      df2 <- df1 %>% 
+        filter(date < '2020-02-01') %>% 
+        select(date,VarName,value,xvar)
+      
+      regcoeff <- summary(lm(value ~ xvar, df2 %>% 
+                               filter(date >= '2015-01-01',
+                                      date <= '2020-01-01')))$coefficients[2]
+      
+      dateseq <- seq(as.Date('2020-02-01'),as.Date(max(df1$date)),by = '1 month')
+      
+      numiterations <- 0
+      
+      for(j in 1:length(dateseq)){
+        
+        numiterations <- numiterations + 1
+        
+        df2 <- df2 %>% 
+          add_row(date = dateseq[j],
+                  VarName = df2[[1,'VarName']],
+                  value = df2$value[nrow(df2)] + regcoeff,
+                  xvar = max(df2$xvar) + numiterations)
+        
+      }
+      
+      master[[paste0('G ',groupvals[i])]] <- df2 %>% 
+        rename(expected = value) %>% 
+        select(-xvar)
+      
+    }
+    
+    df3 <- bind_rows(master)
+    
+    final <- .data %>% 
+      left_join(df3,
+                by = c('date','VarName'))
+    
+    return(final)
+    
+  }else if(groupflag == FALSE){
+    
+    df1 <- .data %>% 
+      arrange(date) %>% 
+      mutate(xvar = row_number()) %>% 
+      select(date,value,xvar)
+    
+    df2 <- df1 %>% 
+      filter(date < '2020-02-01') %>% 
+      select(date,value,xvar)
+    
+    regcoeff <- summary(lm(value ~ xvar, df2 %>% 
+                             filter(date >= '2015-01-01',
+                                    date <= '2020-01-01')))$coefficients[2]
+    
+    dateseq <- seq(as.Date('2020-02-01'),as.Date(max(df1$date)),by = '1 month')
+    
+    numiterations <- 0
+    
+    for(j in 1:length(dateseq)){
+      
+      numiterations <- numiterations + 1
+      
+      df2 <- df2 %>% 
+        add_row(date = dateseq[j],
+                value = df2$value[nrow(df2)] + regcoeff,
+                xvar = max(df2$xvar) + numiterations)
+      
+    }
+    
+    df3 <- df2 %>% 
+      rename(expected = value) %>% 
+      select(-xvar)
+    
+    final <- .data %>% 
+      left_join(df3,
+                by = c('date'))
+    
+    return(final)
+    
+  }else{
+    
+    stop('The argument groupflag must be TRUE or FALSE!')
+    
+  }
+  
+  
+}
+
+##Basic cleaning of CES data
+data_ces_clean <- function(.data,groupflag,groupvar = NULL,outputvar = c('growth','propfirst')){
+  
+  if(groupflag==T){
+    
+    file <- .data %>%
+      arrange(date) %>% 
+      
+      #Non-group operations
+      mutate(value = value*1000) %>% 
+      
+      #Grouped operations
+      group_by(!! sym(groupvar)) %>% 
+      mutate(PropFirst = value/first(value),
+             Change = lead(value,0) - lag(value,1),
+             Growth = (lead(value,0) - lag(value,1))/lag(value,1)) %>% 
+      ungroup()
+    
+    if(outputvar=='growth'){
+      
+      file2 <- file %>% 
+        rbind(totnonfarm) %>% 
+        filter(date >= max(date) %m-% months(23)) 
+      
+      return(file2)
+      
+    }else if(outputvar == 'propfirst'){
+      
+      file2 <- file %>% 
+        rbind(totnonfarm) %>% 
+        data_ces_expected(.,
+                          groupflag = TRUE)
+      
+      return(file2)
+      
+    }else{
+      
+      stop('The arg outputvar must be either "growth" or "propfirst"!')
+      
+    }
+    
+  }else if(groupflag == F){
+    
+    file <- .data %>% 
+      arrange(date) %>% 
+      mutate(value = value*1000,
+             Change = lead(value,0) - lag(value,1),
+             PropFirst = value/first(value),
+             Growth = (lead(value,0) - lag(value,1))/lag(value,1)) %>% 
+      data_ces_expected(.,
+                          groupflag = FALSE)
+
+    
+    return(file)
+    
+  }else{
+    
+    stop('The groupflag argument must be TRUE or FALSE!')
+    
+  }
+  
+  
+}
+
+##Creating recession bars for plotly charts (any more recent recessions will need to be added!)
+get_rec_bars <- function(ymin,ymax){
+  
+  reclist <- list(list(type = "rect",
+                       line = list(color = 'white'),
+                       fillcolor = "grey", opacity = 0.15,
+                       x0 = "2007-12-01", x1 = "2009-06-01", xref = "x",
+                       y0 = ymin, y1 = ymax, yref = "y"),
+                  list(type = "rect",
+                       line = list(color = 'white'),
+                       fillcolor = "grey", opacity = 0.15,
+                       x0 = "2020-02-01", x1 = "2020-04-01", xref = "x",
+                       y0 = ymin, y1 = ymax, yref = "y"))
+  
+  return(reclist)
+  
+}
+
+##Creating spaghetti chart for CES data
+plot_ces_spaghetti <- function(.data, yvar, ytitle, tckformat, id, ymin = NULL, ymax = NULL){
+  
+  pltbase <- .data %>% 
+    group_by(VarName) %>% 
+    SharedData$new(key = ~VarName, group = paste0('Select a ',id)) %>% 
+    plot_ly(x = ~date,
+            y = ~.data[[yvar]],
+            hoverinfo = 'text',
+            hovertext = ~paste0('<b>',VarName,'</b>','<br>',
+                                '(Seasonally Adjusted)','<br>',
+                                '<b>ID</b>: ',seriesID,'<br>',
+                                '<b>Date</b>: ',format(date,'%B %Y'),'<br>',
+                                '<b>Percent of Jan 2003 Employment</b>: ', round(PropFirst*100,1),'%','<br>',
+                                '<b>Actual Employment</b>: ',formatC(value,big.mark=',', format='d'),'<br>',
+                                '<b>Expected Employment</b>: ',formatC(expected,big.mark=',', format='d'),'<br>',
+                                '<b>Actual - Expected</b>: ',formatC(value - expected,big.mark=',', format='d', flag = '+'),'<br>',
+                                '<b>Monthly Change</b>: ',formatC(Change,big.mark=',', flag = '+',format='d'))) %>% 
+    add_lines() %>% 
+    highlight(off = 'plotly_doubleclick',
+              dynamic = T,
+              selectize = T,
+              persistent = T,
+              color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4)) %>% 
+    layout(yaxis = list(title = paste0('<b>',ytitle,'</b>'),
+                        tickformat = tckformat),
+           xaxis = list(title = '<b>Date</b>'),
+           hoverlabel = list(align = 'left'))
+  
+  if(is.null(ymin) & is.null(ymax)){
+    
+    plt <- pltbase %>% 
+      layout(shapes = get_rec_bars(ymin = min(.data[,yvar]) - (abs(min(.data[,yvar]))*0.2),
+                                   ymax = max(.data[,yvar]) + (abs(min(.data[,yvar]))*0.2)))
+    
+    return(plt)
+    
+  }else if(!is.null(ymin) & !is.null(ymax)){
+    
+    plt <- pltbase %>% 
+      layout(shapes = get_rec_bars(ymin = ymin,
+                                   ymax = ymax))
+    
+    return(plt)
+    
+  }else{
+    
+    stop('ymin AND ymax must both be either NULL or a real number value!')
+    
+  }
+  
+}
+
+##Creating spaghetti chart for CES data growth rates
+plot_ces_spaghetti2 <- function(.data, yvar, ytitle, tckformat, id, ymin = NULL, ymax = NULL){
+  
+  pltbase <- .data %>% 
+    group_by(VarName) %>% 
+    SharedData$new(key = ~VarName, group = paste0('Select a ',id,' Growth Rate')) %>% 
+    plot_ly(x = ~date,
+            y = ~.data[[yvar]],
+            hoverinfo = 'text',
+            hovertext = ~paste0('<b>',VarName,'</b>','<br>',
+                                '(Seasonally Adjusted)','<br>',
+                                '<b>Date</b>: ',format(date,'%B %Y'),'<br>',
+                                '<b>Growth Rate</b>: ',round(Growth*100,2),'%','<br>',
+                                '<b>Employment</b>: ',formatC(value,big.mark=',', format='d'),'<br>',
+                                '<b>Monthly Change</b>: ',formatC(Change,big.mark=',', flag = '+',format='d')),
+            line = list(color = crs_get_palette()$bluea4)) %>% 
+    add_lines() %>% 
+    highlight(off = 'plotly_doubleclick',
+              dynamic = T,
+              selectize = T,
+              persistent = T,
+              color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4)) %>% 
+    layout(yaxis = list(title = paste0('<b>',ytitle,'</b>'),
+                        tickformat = tckformat),
+           xaxis = list(title = '<b>Date</b>'),
+           hoverlabel = list(align = 'left'))
+  
+  return(pltbase)
+  
+}
+
+##Function for creating interactive table
+data_interactive <- function(.data){
+  
+  df <- .data %>% 
+    select(-c(period,periodName,year,Change,Growth)) %>% 
+    select('Date' = date,
+           'Series ID' = seriesID,
+           'Series Name' = VarName,
+           'Value' = value,
+           'Percent of January 2003' = PropFirst,
+           'Expected Value' = expected) %>% 
+    DT::datatable(extensions = 'Buttons',
+                    rownames = F,
+                    options = list(pageLength = 5,
+                                   dom = 'Blfrtip',
+                                   buttons = c('copy', 'csv', 'excel'),
+                                   lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+  
+  return(df)
+  
+}
+
+
+
+##CES data
+ces <- file %>% 
+  filter(str_detect(seriesID,'^CES')) %>% 
+  
+  #There is a spelling error in Mining and Logging so I needed to fix here
+  mutate(VarName = str_remove(VarName,' employment$'),
+         VarName = str_remove(VarName,'^\\(Seas\\) '))
+
+##Nonfarm employment (which is up here because it is used a lot in other charts)
+totnonfarm <- ces %>% 
+  filter(VarName == 'Total nonfarm') %>% 
+  data_ces_clean(.,
+                 groupflag = FALSE) %>% 
+  select(-expected)
+
+```
+
+## Introduction
+
+In May of 2020 the research assistants in DSP (Jameson Carter, Isaac Nicchitta, Emma Nyhof, and Paul Romero) developed a PDF-based R Markdown file that visualized data from the monthly [Employment Situation Release](https://www.bls.gov/news.release/empsit.toc.htm) from the Bureau of Labor Statistics (BLS). The goal was to provide CRS researchers with a real-time analysis of the release during a time of great uncertainty in the U.S. labor market. This project has since evolved into the interactive HTML document that it is today. The file you are now reading has been updated to include more data and interactive functionalities. The DSP RAs hope to continuously update this report to keep CRS researchers apprised of labor market trends and to also be prepared for when the U.S. labor market experiences another downturn (during which this report would be especially useful). 
+
+The Employment Situation Release uses microdata from two sources: the [Current Population Survey](https://www.bls.gov/cps/) (**CPS**) and the [Current Employment Statistics program](https://www.bls.gov/ces/) (**CES**). The **CPS** is a monthly survey of households. Survey weights are applied to the microdata from the **CPS** and these weighted data are then used to produce estimates for the unemployment rate, unemployment level, labor force participation rate, among many other useful measures of labor market activity. These measures in turn can be parsed by specific demographic groups. For example, the BLS uses the **CPS** to produce estimates for the unemployment rate by educational attainment. Users can also choose to look at versions of the measures that are or are [seasonally adjusted](https://www.bls.gov/opub/hom/topic/seasonal-adjustment.htm). All tables in the [Employment Situation Release](https://www.bls.gov/news.release/empsit.toc.htm) with the "A" prefix use data from the **CPS**. 
+
+The **CES** is a monthly survey of businesses and government agencies. Like the **CPS**, the BLS uses statistical methods to produce estimates for a number of measures using the **CES** microdata. These measures include: employment, hours worked, hourly earnings, payroll, among others. These measures can be parsed by supervisory status and/or industry. For example, we could use the **CES** to identify the average hourly earnings for non-supervisory employees in the construction industry. These estimates also have an option for the application of seasonal adjustment. All tables in the [Employment Situation Release](https://www.bls.gov/news.release/empsit.toc.htm) with the "B" prefix use data from the **CES**. 
+
+## Key Indicators {.tabset}
+
+### Employment 
+
+The graph below displays the nonfarm employment from January 1, 2003 to `r find_latest_date('CES0000000001')`. `r change_since(start_comp_date, c('CES0000000001'), "normal")`
+
+```{r}
+employment_level_nonfarm = plot_ly() %>%
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment Level</b>',  tickmode = 'linear', dtick = 5000000),
+         hoverlabel = list(align = 'left'),
+         title = 'Total Nonfarm Employment',
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(110000000,200000000)) %>%
+      layout(shapes = get_rec_bars(ymin = 110000000,
+                                   ymax = 180000000))
+
+     
+    employment_level_nonfarm = addtracecontrol_nopercent(
+                  object = employment_level_nonfarm,
+                  varname = '(Seas) Total nonfarm employment',
+                  colorfunction = crs_get_palette()$red4,
+                  variable_pub_name = "Nonfarm Total Employment") 
+    
+    employment_level_nonfarm
+```
+
+### Unemployment Rate
+
+The graph below displays the unemployment rate from January 1, 2003 to `r find_latest_date('LNS14000000')`. `r change_since(start_comp_date, c('LNS14000000'), "normal")`
+
+```{r}
+
+unemployment_rate = plot_ly() %>%
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%"),
+
+         title = 'Unemployment Rate',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,18)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 18))
+
+     
+    unemployment_rate = addtracecontrol(
+                  object = unemployment_rate,
+                  varname = "(Seas) Unemployment Rate",
+                  colorfunction = crs_get_palette()$red4,
+                  variable_pub_name = "Unemployment Rate") 
+    
+    unemployment_rate
+
+```
+
+### Labor Force Participation Rate
+
+The graph below displays the labor force participation rate by educational attainment from January 1, 2003 to `r find_latest_date('LNS11300000')`. `r change_since(start_comp_date, c('LNS11300000'), "normal")`
+
+```{r}
+
+lfpr = plot_ly() %>%
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Labor Force Participation Rate</b>',  tickmode = 'linear', dtick = 5, ticksuffix = "%"),
+
+         title = 'Labor Force Participation Rate',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(50,90)) %>%
+      layout(shapes = get_rec_bars(ymin = 50,
+                                   ymax = 90))
+
+     
+    lfpr = addtracecontrol(
+                  object = lfpr,
+                  varname = "(Seas) Labor Force Participation Rate",
+                  colorfunction = crs_get_palette()$red4,
+                  variable_pub_name = "Labor Force Participation Rate") 
+    
+    lfpr
+
+```
+
+### Employment Population Ratio 
+
+The graph below displays the employment-to-population ratio from January 1, 2003 to `r find_latest_date('LNS12300000')`. `r change_since(start_comp_date, c('LNS12300000'), "normal")`
+
+```{r}
+
+
+epr = plot_ly() %>%
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment-Population Ratio</b>',  tickmode = 'linear', dtick = 5, ticksuffix = "%"),
+
+         title = 'Employment-Population Ratio',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(40,80)) %>%
+      layout(shapes = get_rec_bars(ymin = 40,
+                                   ymax = 80))
+
+     
+    epr = addtracecontrol(
+                  object = epr,
+                  varname = "(Seas) Employment-Population Ratio",
+                  colorfunction = crs_get_palette()$red4,
+                  variable_pub_name = "Employment-Population Ratio") 
+    
+    epr
+
+```
+
+## CPS-Specific
+
+This section of the report provides detailed information on employment broken down by education, race, nativity, age, and characterizations of employment/unemployment that make up the U.S. economy. These visuals display time series beginning in January 2003 and either show the level of employment metrics (i.e. unemployment rate, number of employed, ect.) or the composition of employment metrics (i.e. share of employment by industry). The text above each chart provides the metric with the largest absolute percentage change since `r paste0(months(as.Date(start_comp_date)), " "  , day(as.Date(start_comp_date))   , ", ", year(as.Date(start_comp_date)))`. 
+
+Lastly, each section provides the opportunity to download the raw data for your own analysis. Located within the Data tab are options to view the data, search observations, copy the data, or download to .csv and Excel.
+
+We move now to explaining how to interact with the charts in this section. Every chart was made using the `plotly` package in R. This means that they are all interactive charts. Here are some of the main ways to interact with each of these charts:
+
+* When you hover over a specific point on a line, you will notice that there is a box containing a lot of useful information. 
+* You can zoom-in on specific parts of the visual by clicking and dragging your mouse. 
+* You can select specific sectors of interest by:
+  + Clicking on the lines you are interested in, or
+  + Searching for them in the box above the figure. 
+* On some graphs, those with gray lines, you can select to highlight certain lines.
+  + Click once to 'turn on' a line and double click anywhere in the plot to 'turn off' all lines.
+  + Additionally, you can search from among available variables which to highlight.
+  + When selecting industries, you can vary the color of the selected lines by clicking on the color box below "Brush color" in the upper-left-hand corner before you select each individual industry.
+
+### Education {.tabset}
+
+#### Unemployment Rate
+
+Using Table A4 of the Employment Situation Release, the following graph plots the unemployment rate by educational attainment from January 1, 2003 to `r find_latest_date('LNS14027659')`. `r change_since(start_comp_date, c('LNS14027659', 'LNS14027660', 'LNS14027689', 'LNS14027662'), "normal")`  
+
+```{r}
+unemployment_ed = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%"),
+
+         title = 'Unemployment Rate by Educational Attainment',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,33)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 33))
+
+     
+    unemployment_ed = addtracecontrol(
+                  object = unemployment_ed,
+                  varname = "(Seas) Unemployment Rate - Less than a High School Diploma, 25 yrs. & over",
+                  colorfunction = crs_get_palette()$olive3,
+                  variable_pub_name = "Unemployment Rate for those with Less than High School Diploma") 
+
+
+    unemployment_ed = addtracecontrol(
+                      object = unemployment_ed, 
+                      varname = "(Seas) Unemployment Rate - High School Graduates, No College, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive4, 
+                      variable_pub_name = "Unemployment Rate for High School Graduates") 
+    
+    unemployment_ed = addtracecontrol(
+                      object = unemployment_ed, 
+                      varname = "(Seas) Unemployment Rate - Some College or Associate Degree, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive5, 
+                      variable_pub_name = "Unemployment Rate for those with Some College or an Associate Degree")
+    
+    unemployment_ed = addtracecontrol(
+                      object = unemployment_ed, 
+                      varname = "(Seas) Unemployment Rate - Bachelor's degree and higher, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive6, 
+                      variable_pub_name = "Unemployment Rate for 4-year College Graduates and higher")
+    
+    
+    unemployment_ed
+    
+    rm(unemployment_ed)
+
+```
+
+#### Labor Force Participation Rate
+
+Using Table A4 of the Employment Situation Release, the following graph plots the labor force participation rate by educational attainment from January 1, 2003 to `r find_latest_date('LNS11027660')`. `r change_since(start_comp_date, c('LNS11027660', 'LNS11327689', 'LNS11327662', 'LNS11327659'), "normal")` 
+
+```{r}
+
+LFPR_ed = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 10, ticksuffix = "%"),
+
+         title = 'Labor Force Participation Rate by Educational Attainment',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,100)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+     
+    LFPR_ed = addtracecontrol(
+                  object = LFPR_ed,
+                  varname = "(Seas) Labor Force Participation Rate - Less than a High School Diploma, 25 yrs. & over",
+                  colorfunction = crs_get_palette()$olive3,
+                  variable_pub_name = "Labor Force Participation Rate for those with Less than High School Diploma") 
+
+
+    LFPR_ed = addtracecontrol(
+                      object = LFPR_ed, 
+                      varname = "(Seas) Labor Force Participation Rate - High School Graduates, No College, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive4, 
+                      variable_pub_name = "Labor Force Participation Rate for High School Graduates") 
+    
+    LFPR_ed = addtracecontrol(
+                      object = LFPR_ed, 
+                      varname = "(Seas) Labor Force Participation Rate - Some College or Associate Degree, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive5, 
+                      variable_pub_name = "Labor Force Participation Rate for those with Some College or an Associate Degree")
+    
+    LFPR_ed = addtracecontrol(
+                      object = LFPR_ed, 
+                      varname = "(Seas) Labor Force Participation Rate - Bachelor's degree and higher, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive6, 
+                      variable_pub_name = "Labor Force Participation Rate for 4-year College Graduates and higher")
+    
+    
+    LFPR_ed
+
+```
+
+#### Employment Population Ratio 
+
+Using Table A4 of the Employment Situation Release, the following graph plots the employment population ratio by educational attainment from January 1, 2003 to `r find_latest_date('LNS12327659')`. `r change_since(start_comp_date, c('LNS12327659', 'LNS12327660', 'LNS12327689', 'LNS12327662'), "normal")` 
+
+```{r}
+
+empop_ed = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment-Population Ratio</b>',  tickmode = 'linear', dtick = 10, ticksuffix = "%"),
+
+         title = 'Employment-Population Ratio by Educational Attainment',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,100)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+     
+    empop_ed = addtracecontrol(
+                  object = empop_ed,
+                  varname = "(Seas) Employment-Population Ratio - Less than a High School Diploma, 25 yrs. & over",
+                  colorfunction = crs_get_palette()$olive3,
+                  variable_pub_name = "Employment-Population Ratio for those with Less than High School Diploma") 
+
+
+    empop_ed = addtracecontrol(
+                      object = empop_ed, 
+                      varname = "(Seas) Employment-Population Ratio - High School Graduates, No College, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive4, 
+                      variable_pub_name = "Employment-Population Ratio for High School Graduates") 
+    
+    empop_ed = addtracecontrol(
+                      object = empop_ed, 
+                      varname = "(Seas) Employment-Population Ratio - Some College or Associate Degree, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive5, 
+                      variable_pub_name = "Employment-Population Ratio for those with Some College or an Associate Degree")
+    
+    empop_ed = addtracecontrol(
+                      object = empop_ed, 
+                      varname = "(Seas) Employment-Population Ratio - Bachelor's degree and higher, 25 yrs. & over", 
+                      colorfunction = crs_get_palette()$olive6, 
+                      variable_pub_name = "Employment-Population Ratio for 4-year College Graduates and higher")
+    
+    empop_ed
+
+```
+
+#### Share of Labor Force, Employed, Unemployed, and NILF
+
+Using Table A4 of the Employment Situation Release, the following graphs plot the share of the labor force, employed, unemployed, and not in labor force for each level of educational attainment from January 1, 2003 to `r find_latest_date('LNS11027659')`. `r change_since(start_comp_date, c('LNS11027659', 'LNS12027659', 'LNS13027659', 'LNS11027660', 'LNS12027660', 'LNS13027660', 'LNS11027689', 'LNS12027689', 'LNS13027689', 'LNS11027662', 'LNS12027662', 'LNS13027662'), "share_seas")` 
+
+```{r}
+
+# not in labor force is not avaialbe in table B4 from BLS
+
+file_share_ed = file %>%
+
+            filter(VarName %in% c(
+              "(Seas) Civilian Labor Force Level - Less than a High School Diploma, 25 yrs. & over",
+              "(Seas) Employment Level - Less than a High School Diploma, 25 yrs. & over",
+              "(Seas) Unemployment Level - Less than a High School Diploma, 25 yrs. & over",
+              "(Seas) Not in Labor Force - Less than a High School Diploma, 25 yrs. & over",
+              
+              "(Seas) Civilian Labor Force Level - High School Graduates, No College, 25 yrs. & over",
+              "(Seas) Employment Level - High School Graduates, No College, 25 yrs. & over",
+              "(Seas) Unemployment Level - High School Graduates, No College, 25 yrs. & over",
+              "(Seas) Not in Labor Force - High School Graduates, No College, 25 yrs. & over",
+              
+              "(Seas) Civilian Labor Force Level - Some College or Associate Degree, 25 yrs. & over",
+              "(Seas) Employment Level - Some College or Associate Degree, 25 yrs. & over",
+              "(Seas) Unemployment Level - Some College or Associate Degree, 25 yrs. & over",
+              "(Seas) Not in Labor Force - Some College or Associate Degree, 25 yrs. & over",
+              
+              "(Seas) Civilian Labor Force Level - Bachelor's degree and higher, 25 yrs. & over",
+              "(Seas) Employment Level - Bachelor's degree and higher, 25 yrs. & over",
+              "(Seas) Unemployment Level - Bachelor's degree and higher, 25 yrs. & over",
+              "(Seas) Not in Labor Force - Bachelor's degree and higher, 25 yrs. & over")) %>%
+            
+            mutate(breakdown_col = ifelse(grepl("Less than a High School" ,VarName , fixed = TRUE), 
+                                 "Less than High School", ifelse(grepl("High School Graduates" ,VarName , fixed = TRUE),
+                                                 "High School Graduates", ifelse(grepl("Associate Degree" ,VarName , fixed = TRUE),
+                                                                                 "Some College or Associates Degree", "4-Year College or Higher")))) %>%
+            
+              mutate(vartype = ifelse(grepl("Civilian" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level"))))
+
+file_share_ed = file_share_2_arrrangedata(file_share_ed)
+
+
+################### PLOTS ###################################
+
+civilian_labor_force_education = plot_ly(data = file_share_ed %>% filter(vartype == "Civilian Labor Force Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$olive6, crs_get_palette()$olive4, crs_get_palette()$olive3, crs_get_palette()$olive5),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Labor Force Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text ='<b>Labor Force Level Share</b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100),
+                      shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100)),
+         title = 'Unemployment Level Share by Education',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+
+unemployed_education = plot_ly(data = file_share_ed %>% filter(vartype == "Unemployment Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$olive6, crs_get_palette()$olive4, crs_get_palette()$olive3, crs_get_palette()$olive5),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Unemployment Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text ='<b>Unemployment Level Share</b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Unemployment Level Share by Education',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+employed_education = plot_ly(data = file_share_ed %>% filter(vartype == "Employment Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$olive6, crs_get_palette()$olive4, crs_get_palette()$olive3, crs_get_palette()$olive5),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Employment Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Employment Level Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Employment Level Share by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+
+
+subplot(civilian_labor_force_education, unemployed_education, employed_education,
+        nrows = 2,
+        margin = 0.04,
+        titleY = TRUE, titleX = TRUE, shareX = TRUE) %>%
+        layout(title = "Labor Force, Employment, and Unemployment by Education",
+               yaxis = list(zerolinewidth = 2, 
+                            zerolinecolor = '#ffff'))
+
+```
+
+#### Data
+
+```{r} 
+
+file %>% 
+  filter(seriesID %in% c('LNS14027659', 'LNS14027660', 'LNS14027689', 'LNS14027662', 'LNS11027660', 'LNS11327689', 'LNS11327662', 'LNS11327659', 'LNS12327659', 'LNS12327660', 'LNS12327689', 'LNS12327662', 'LNS11027659', 'LNS12027659', 'LNS13027659', 'LNS11027660', 'LNS12027660', 'LNS13027660', 'LNS11027689', 'LNS12027689', 'LNS13027689', 'LNS11027662', 'LNS12027662', 'LNS13027662')) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+```
+
+
+### Race {.tabset}
+
+#### Unemployment Rate
+
+Using Table A2 of the Employment Situation Release, the following graph plots the unemployment rate by race from January 1, 2003 to `r find_latest_date('LNS14000003')`. `r change_since(start_comp_date, c('LNS14000003', 'LNS14000006', 'LNS14032183'), "normal")`  
+
+```{r}
+
+############################### PLOT ######################################
+
+unemploymentrace = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 10, ticksuffix = "%"),
+
+         title = 'Unemployment Rate by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,40)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 40))
+
+
+    unemploymentrace = addtracecontrol(
+                  object = unemploymentrace,
+                  varname = "(Seas) Unemployment Rate - Black or African American",
+                  colorfunction = crs_get_palette()$green4,
+                  variable_pub_name = "Unemployment Rate Black") 
+
+
+    unemploymentrace = addtracecontrol(
+                      object = unemploymentrace, 
+                      varname = "(Seas) Unemployment Rate - Asian", 
+                      colorfunction = crs_get_palette()$purple4, 
+                      variable_pub_name = "Unemployment Rate Asian") 
+    
+    unemploymentrace = addtracecontrol(
+                      object = unemploymentrace, 
+                      varname = "(Seas) Unemployment Rate - White", 
+                      colorfunction = crs_get_palette()$blueb4, 
+                      variable_pub_name = "Unemployment Rate White") 
+    
+    unemploymentrace
+
+
+```
+
+#### Labor Force Participation Rate
+
+Using Table A2 of the Employment Situation Release, the following graph plots the labor force participation rate by race from January 1, 2003 to `r find_latest_date('LNS11332183')`. `r change_since(start_comp_date, c('LNS11332183', 'LNS11300006', 'LNS11300003'), "normal")`
+
+```{r}
+
+
+labor_force_participation_race = plot_ly() %>%
+  
+      layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Labor Force Participation Rate</b>',  tickmode = 'linear', dtick = 10, ticksuffix = "%"),
+       
+         title = 'Labor Force Participation Rate by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,100)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+    labor_force_participation_race = addtracecontrol(
+                  object = labor_force_participation_race,
+                  varname = "(Seas) Labor Force Participation Rate - Black or African American",
+                  colorfunction = crs_get_palette()$green4,
+                  variable_pub_name = "Labor Force Participation Rate Black")
+    
+    labor_force_participation_race = addtracecontrol(
+                  object = labor_force_participation_race,
+                  varname = "(Seas) Labor Force Participation Rate - White",
+                  colorfunction = crs_get_palette()$blueb4,
+                  variable_pub_name = "Labor Force Participation Rate White") 
+        
+    labor_force_participation_race = addtracecontrol(
+                  object = labor_force_participation_race,
+                  varname = "(Seas) Labor Force Participation Rate - Asian",
+                  colorfunction = crs_get_palette()$purple4,
+                  variable_pub_name = "Labor Force Participation Rate Asian") 
+    
+    labor_force_participation_race
+
+
+```
+
+#### Employment Population Ratio 
+
+Using Table A2 of the Employment Situation Release, the following graph plots the employment population ratio by race from January 1, 2003 to `r find_latest_date('LNS12300003')`. `r change_since(start_comp_date, c('LNS12300003', 'LNS12300006', 'LNS12332183'), "normal")` 
+
+```{r}
+
+employment_population_ratio_race = plot_ly() %>%
+  
+      layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment-Population Ratio</b>',  tickmode = 'linear', dtick = 10, ticksuffix = "%"),
+         xaxis = list(title = '<b>Date2</b>',  tickmode = 'linear', zerolinewidth = 2),
+         title = 'Employment-Population Ratio by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,100)) %>%
+      layout(shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+    employment_population_ratio_race = addtracecontrol(
+                  object = employment_population_ratio_race,
+                  varname = "(Seas) Employment-Population Ratio - Black or African American",
+                  colorfunction = crs_get_palette()$green4,
+                  variable_pub_name = "Employment-Population Ratio Black")
+    
+    employment_population_ratio_race = addtracecontrol(
+                  object = employment_population_ratio_race,
+                  varname = "(Seas) Employment-Population Ratio - White",
+                  colorfunction = crs_get_palette()$blueb4,
+                  variable_pub_name = "Employment-Population Ratio White") 
+        
+    employment_population_ratio_race = addtracecontrol(
+                  object = employment_population_ratio_race,
+                  varname = "(Seas) Employment Population Ratio - Asian",
+                  colorfunction = crs_get_palette()$purple4,
+                  variable_pub_name = "Employment-Population Ratio Asian") 
+    
+    employment_population_ratio_race
+
+```
+
+#### Share of Labor Force, Employed, Unemployed, and NILF
+
+Using Table A4 of the Employment Situation Release, the following graphs plot the share of the labor force, employed, unemployed, and not in labor force for each level of race from January 1, 2003 to `r find_latest_date('LNS11027659')`. `r change_since(start_comp_date, c('LNS11000003', 'LNS12000003', 'LNS13000003', 'LNS11000006', 'LNS12000006', 'LNS13000006', 'LNS15000006', 'LNS11032183', 'LNS12032183', 'LNS13032183', 'LNS15032183', 'LNS15000003'), "share_seas")` 
+
+```{r}
+
+##### SHARE ADD TRACE ###################
+
+file_share_race = file %>%
+
+            filter(VarName %in% c(
+              "(Seas) Civilian Labor Force Level - White",
+              "(Seas) Employment Level - White",
+              "(Seas) Unemployment Level - White",
+              "(Seas) Not in Labor Force, White",
+              
+              "(Seas) Civilian Labor Force Level - Black or African American",
+              "(Seas) Employment Level - Black or African American",
+              "(Seas) Unemployment Level - Black or African American",
+              "(Seas) Not in Labor Force Black or African American",
+              
+              "(Seas) Civilian Labor Force Level - Asian",
+              "(Seas) Employment Level - Asian",
+              "(Seas) Unemployment Level - Asian",
+              "(Seas) Not in Labor Force - Asian")) %>%
+            
+            mutate(breakdown_col = ifelse(grepl("White" ,VarName , fixed = TRUE), 
+                                 "White", ifelse(grepl("Asian" ,VarName , fixed = TRUE),
+                                                 "Asian", "Black or African American"))) %>%
+            
+                mutate(vartype = ifelse(grepl("Civilian Labor Force" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in Labor Force" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level"))))
+
+file_share_race =  file_share_2_arrrangedata(file_share_race)
+
+################### PLOTS ###################################
+
+civilianlaborforce_race = plot_ly(data = file_share_race %>% filter(vartype == "Civilian Labor Force Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$purple4, crs_get_palette()$green4, crs_get_palette()$blueb4),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Labor Force Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text ='<b>Labor Force Level Share</b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Unemployment Level Share by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+unemployed_race = plot_ly(data = file_share_race %>% filter(vartype == "Unemployment Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$purple4, crs_get_palette()$green4, crs_get_palette()$blueb4),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Unemployment Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text ='<b>Unemployment Level Share</b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Unemployment Level Share by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+employed_race = plot_ly(data = file_share_race %>% filter(vartype == "Employment Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$purple4, crs_get_palette()$green4, crs_get_palette()$blueb4),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Employment Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Employment Level Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Employment Level Share by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+NILF_race = plot_ly(data = file_share_race %>% filter(vartype == "Not in Labor Force"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$purple4, crs_get_palette()$green4, crs_get_palette()$blueb4),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Not in Labor Force Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Not in Labor Force Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Not in Labor Force  Level Share by Race',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 100))
+
+subplot(civilianlaborforce_race, unemployed_race, employed_race, NILF_race, 
+        nrows = 2,
+        margin = 0.04,
+        titleY = TRUE, titleX = TRUE, shareX = TRUE) %>%
+        layout(title = "Civilian Labor Force, Employment, Unemployment, and Not in Labor Force Shares by Race",
+               yaxis = list(zerolinewidth = 2, 
+                            zerolinecolor = '#ffff'))
+
+```
+
+#### Data
+
+```{r} 
+
+file %>% 
+  filter(seriesID %in% c('LNS11000003', 'LNS12000003', 'LNS13000003', 'LNS11000006', 'LNS12000006', 'LNS13000006', 'LNS15000006', 'LNS11032183', 'LNS12032183', 'LNS13032183', 'LNS15032183', 'LNS15000003', 'LNS12300003', 'LNS12300006', 'LNS12332183', 'LNS11332183', 'LNS11300006', 'LNS11300003', 'LNS14000003', 'LNS14000006', 'LNS14032183')) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+```
+
+
+### Nativity (Not Seasonally Adjusted) {.tabset}
+
+#### Unemployment Rate
+
+Using Table A7 of the Employment Situation Release, the following graph plots the unemployment rate by nativity from January 1, 2003 to `r find_latest_date('LNU04073395')`. `r change_since(start_comp_date, c('LNU04073395', 'LNU04073413'), "normal")` 
+
+```{r}
+
+unemploymentnativity = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%"),
+         title = 'Unemployment Rate by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,25),
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 25))
+
+     
+    unemploymentnativity = addtracecontrol(
+                  object = unemploymentnativity,
+                  varname = "(Unadj) Unemployment Rate - Foreign born",
+                  colorfunction = crs_get_palette()$orange3,
+                  variable_pub_name = "Unemployment Rate Foreign Born") 
+
+
+    unemploymentnativity = addtracecontrol(
+                      object = unemploymentnativity, 
+                      varname = "(Unadj) Unemployment Rate - Native born", 
+                      colorfunction = crs_get_palette()$orange4, 
+                      variable_pub_name = "Unemployment Rate Native Born") 
+    
+    
+    unemploymentnativity
+
+```
+
+#### Labor Force Participation Rate
+
+Using Table A7 of the Employment Situation Release, the following graph plots the labor force participation rate by race from January 1, 2003 to `r find_latest_date('LNU01373395')`. `r change_since(start_comp_date, c('LNU01373395', 'LNU01373413'), "normal")`
+
+```{r}
+
+NILFnativity = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Labor Force Participation Rate</b>',  tickmode = 'linear', dtick = 5, ticksuffix = "%"),
+         title = 'Labor Force Participation Rate by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(25,75),
+         shapes = get_rec_bars(ymin = 25,
+                                   ymax = 75))
+
+     
+    NILFnativity = addtracecontrol(
+                  object = NILFnativity,
+                  varname = "(Unadj) Labor Force Participation Rate - Foreign born",
+                  colorfunction = crs_get_palette()$orange3,
+                  variable_pub_name = "Labor Force Participation Rate Foreign Born") 
+
+
+    NILFnativity = addtracecontrol(
+                      object = NILFnativity, 
+                      varname = "(Unadj) Labor Force Participation Rate - Native born", 
+                      colorfunction = crs_get_palette()$orange4, 
+                      variable_pub_name = "Labor Force Participation Rate Native Born") 
+    
+    
+    NILFnativity
+
+
+```
+
+#### Employment Population Ratio
+
+Using Table A7 of the Employment Situation Release, the following graph plots the employment population ratio by nativity from January 1, 2003 to `r find_latest_date('LNU02373395')`. `r change_since(start_comp_date, c('LNU02373395', 'LNU02373413'), "normal")`
+
+```{r}
+
+EMPnativity = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment-Population Ratio</b>',  tickmode = 'linear', dtick = 5, ticksuffix = "%"),
+         title = 'Employment-Population Ratio by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(25,75),
+         shapes = get_rec_bars(ymin = 25,
+                                   ymax = 75))
+
+     
+    EMPnativity = addtracecontrol(
+                  object = EMPnativity,
+                  varname = "(Unadj) Employment-Population Ratio - Foreign born",
+                  colorfunction = crs_get_palette()$orange3,
+                  variable_pub_name = "Employment-Population Ratio Foreign Born") 
+
+
+    EMPnativity = addtracecontrol(
+                      object = EMPnativity, 
+                      varname = "(Unadj) Employment-Population Ratio - Native born", 
+                      colorfunction = crs_get_palette()$orange4, 
+                      variable_pub_name = "Employment-Population Ratio Native Born") 
+    
+    
+    EMPnativity
+
+```
+
+#### Share of Labor Force, Employed, Unemployed, and NILF
+
+Using Table A4 of the Employment Situation Release, the following graphs plot the share of the labor force, employed, unemployed, and not in labor force for each level of race from January 1, 2003 to `r find_latest_date('LNU01073395')`. `r change_since(start_comp_date, c('LNU01073395', 'LNU02073395', 'LNU03073395', 'LNU05073395', 'LNU01073413', 'LNU02073413', 'LNU03073413', 'LNU05073413'), "share")`
+
+```{r}
+
+##### SHARE ADD TRACE ###################
+
+file_share_nativity = file %>%
+
+            filter(VarName %in% c(
+              "(Unadj) Civilian Labor Force Level - Native born",
+              "(Unadj) Employment Level - Native born" ,
+              "(Unadj) Unemployment Level - Native born" ,
+              "(Unadj) Not in Labor Force - Native born" ,
+              
+              "(Unadj) Civilian Labor Force Level - Foreign born",
+              "(Unadj) Employment Level - Foreign born" ,
+              "(Unadj) Unemployment Level - Foreign born" ,
+              "(Unadj) Not in Labor Force - Foreign born"
+              )) %>%
+              
+
+            
+            mutate(breakdown_col = ifelse(grepl("Foreign" ,VarName , fixed = TRUE), 
+                                 "Foreign Born", ifelse(grepl("Native" ,VarName , fixed = TRUE),
+                                                 "Native Born", "NotApp"))) %>%
+            
+              mutate(vartype = ifelse(grepl("Civilian" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Not in" ,VarName , fixed = TRUE),
+                                                                              "Not in Labor Force", "Employment Level"))))
+  
+file_share_nativity =  file_share_2_arrrangedata_notseas(file_share_nativity)
+
+################### PLOTS ###################################
+laborforce_nativity = plot_ly(data = file_share_nativity %>% filter(vartype == "Civilian Labor Force Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        type = 'scatter',
+                        colors = c(crs_get_palette()$orange3, crs_get_palette()$orange4),
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Labor Force Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text ='<b>Labor Force Level Share</b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Unemployment Level Share by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE) %>%
+  
+         layout(shapes = get_rec_bars(ymin = 0, ymax = 100))
+
+unemployed_nativity = plot_ly(data = file_share_nativity %>% filter(vartype == "Unemployment Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        type = 'scatter',
+                        colors = c(crs_get_palette()$orange3, crs_get_palette()$orange4),
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Unemployment Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text ='<b>Unemployment Level Share</b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Unemployment Level Share by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE) %>%
+         layout(shapes = get_rec_bars(ymin = 0, ymax = 100))
+
+employed_nativity = plot_ly(data = file_share_nativity %>% filter(vartype == "Employment Level"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        type = 'scatter',
+                        colors = c(crs_get_palette()$orange3, crs_get_palette()$orange4),
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Employment Level Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Employment Level Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Employment Level Share by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE) %>%
+         layout(shapes = get_rec_bars(ymin = 0, ymax = 100))
+
+NILF_nativity = plot_ly(data = file_share_nativity %>% filter(vartype == "Not in Labor Force"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col, 
+                        colors = c(crs_get_palette()$orange3, crs_get_palette()$orange4),
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> Not in Labor Force Share - ' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Not in Labor Force Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,100)),
+         title = 'Not in Labor Force  Level Share by Nativity',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE) %>%
+         layout(shapes = get_rec_bars(ymin = 0, ymax = 100))
+
+## print all 4 plots together
+
+subplot(laborforce_nativity, unemployed_nativity, employed_nativity, NILF_nativity, 
+        nrows = 2,
+        margin = 0.04,
+        titleY = TRUE, titleX = TRUE, shareX = TRUE) %>%
+        layout(title = "Employment, Unemployment, and Not in Labor Force Shares by Nativity",
+               yaxis = list(zerolinewidth = 2, 
+                            zerolinecolor = '#ffff'))
+
+```
+
+#### Data
+
+```{r}
+
+file %>% 
+  filter(seriesID %in% c('LNU01073395', 'LNU02073395', 'LNU03073395', 'LNU05073395', 'LNU01073413', 'LNU02073413', 'LNU03073413', 'LNU05073413', 'LNU02373395', 'LNU02373413', 'LNU01373395', 'LNU01373413', 'LNU04073395', 'LNU04073413')) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### Age {.tabset}
+
+#### Unemployment Rate
+
+Using Table A10 of the Employment Situation Release, the following graph plots the employment rate by age from January 1, 2003 to `r find_latest_date('LNS14000093')`. `r change_since(start_comp_date, c('LNS14000086', 'LNS14000088', 'LNS14000036', 'LNS14000089', 'LNS14000091', 'LNS14000093'), "normal")`
+
+```{r}
+
+unemploymentage = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%"),
+         title = 'Unemployment Rate by Age',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,35),
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 35))
+
+     
+    unemploymentage = addtracecontrol(
+                  object = unemploymentage,
+                  varname = "(Seas) Unemployment Rate - 16-19 yrs.",
+                  colorfunction = crs_get_palette()$bluea1,
+                  variable_pub_name = "Unemployment Rate 16-19 yrs") 
+
+
+    unemploymentage = addtracecontrol(
+                  object = unemploymentage,
+                  varname = "(Seas) Unemployment Rate - 20-24 yrs.",
+                  colorfunction = crs_get_palette()$bluea2,
+                  variable_pub_name = "Unemployment Rate 20-24 yrs") 
+    
+    unemploymentage = addtracecontrol(
+                  object = unemploymentage,
+                  varname = "(Seas) Unemployment Rate - 25-34 yrs.",
+                  colorfunction = crs_get_palette()$bluea3,
+                  variable_pub_name = "Unemployment Rate 25-34 yrs") 
+        
+    unemploymentage = addtracecontrol(
+                  object = unemploymentage,
+                  varname = "(Seas) Unemployment Rate - 35-44 yrs.",
+                  colorfunction = crs_get_palette()$bluea4,
+                  variable_pub_name = "Unemployment Rate 35-44 yrs") 
+                
+                
+    unemploymentage = addtracecontrol(
+                  object = unemploymentage,
+                  varname = "(Seas) Unemployment Rate - 45-54 yrs.",
+                  colorfunction = crs_get_palette()$bluea5,
+                  variable_pub_name = "Unemployment Rate 45-54 yrs") 
+                
+    unemploymentage = addtracecontrol(
+                  object = unemploymentage,
+                  varname = "(Seas) Unemployment Rate - 55 yrs. & over",
+                  colorfunction = crs_get_palette()$bluea6,
+                  variable_pub_name = "Unemployment Rate 55 yrs. & over") 
+    
+    
+    unemploymentage
+
+```
+
+#### Data
+
+```{r}
+
+file %>% 
+  filter(seriesID %in% c('LNS14000086', 'LNS14000088', 'LNS14000036', 'LNS14000089', 'LNS14000091', 'LNS14000093')) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### Marital Status {.tabset}
+
+#### Unemployment Rate
+
+Using Table A10 of the Employment Situation Release, the following graph plots the employment rate by marital status from January 1, 2003 to `r find_latest_date('LNS14000150')`. `r change_since(start_comp_date, c('LNS14000150', 'LNS14000315'), "normal")`
+
+```{r}
+
+unemploymentmarried = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%"),
+         title = 'Unemployment Rate for Married Men and Women',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,15),
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 15))
+
+     
+    unemploymentmarried = addtracecontrol(
+                  object = unemploymentmarried,
+                  varname = "(Seas) Unemployment Rate - Married Women",
+                  colorfunction = crs_get_palette()$orange4,
+                  variable_pub_name = "Unemployment Rate Married Women") 
+
+
+    unemploymentmarried = addtracecontrol(
+                  object = unemploymentmarried,
+                  varname = "(Seas) Unemployment Rate - Married Men",
+                  colorfunction = crs_get_palette()$orange5,
+                  variable_pub_name = "Unemployment Rate Married Men") 
+    
+    
+    unemploymentmarried
+
+```
+
+#### Data
+
+```{r}
+
+file %>% 
+  filter(seriesID %in% c('LNS14000150', 'LNS14000315')) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### Full- or Part-Time {.tabset}
+
+#### Employment Rate
+
+Using Table A10 of the Employment Situation Release, the following graph plots the employment rate by marital status from January 1, 2003 to `r find_latest_date('LNS14100000')`. `r change_since(start_comp_date, c('LNS14100000', 'LNS14200000'), "normal")`
+
+```{r}
+
+
+
+
+employed_time = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Rate</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%"),
+         title = 'Unemployment Rate for Usually Part and Full Time Employed',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         range = c(0,25),
+         shapes = get_rec_bars(ymin = 0,
+                                   ymax = 25))
+
+     
+    employed_time = addtracecontrol(
+                  object = employed_time,
+                  varname = "(Seas) Unemployment Rate - Full Time Workers",
+                  colorfunction = crs_get_palette()$purple3,
+                  variable_pub_name = "Unemployment Rate, Usually Work Full Time") 
+
+
+    employed_time = addtracecontrol(
+                  object = employed_time,
+                  varname = "(Seas) Unemployment Rate - Part Time Workers",
+                  colorfunction = crs_get_palette()$purple5,
+                  variable_pub_name = "Unemployment Rate, Usually Work Part Time") 
+    
+    
+    employed_time
+
+```
+
+#### Data
+
+```{r}
+
+file %>% 
+  filter(seriesID %in% c('LNS14100000', 'LNS14200000')) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+
+### Occupation {.tabset}
+
+#### Share of Employment
+
+```{r}
+
+file_share_occ = file %>%
+  filter((as.numeric(substrRight(seriesID,5)) > 32200  & 
+            as.numeric(substrRight(seriesID,5)) < 32229)) %>%
+  
+   mutate(breakdown_col = sub(".* - ", "", VarName)) %>%
+            
+              mutate(vartype = ifelse(grepl("Civilian" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Unemployment Level" ,VarName , fixed = TRUE),
+                                                 "Unemployment Level", ifelse(grepl("Unemployment Rate" ,VarName , fixed = TRUE),
+                                                                              "Unemployment Rate", "Employment Level"))))
+
+
+file_share_occ =  file_share_2_arrrangedata_notseas(file_share_occ)
+
+occ_list = file_share_occ %>%
+  filter(vartype == "Employment Level") 
+
+occ_list = occ_list$seriesID %>%
+  unique()
+
+occ_list_unemployment = file_share_occ %>%
+  filter(vartype == "Unemployment Rate") 
+
+occ_list_unemployment = occ_list_unemployment$seriesID %>%
+  unique()
+
+comb_list_occ = c(occ_list, occ_list_unemployment)
+
+
+
+```
+
+Using Table A13 of the Employment Situation Release, the following graphs plot the share of the employment for each occupation from January 1, 2003 to `r find_latest_date('LNU04032226')`. `r change_since(start_comp_date, occ_list , "share")`
+
+```{r}
+
+plot_ly(data = file_share_occ %>% filter(vartype == "Employment Level") %>% highlight_key(~breakdown_col, "Select an Occupation"),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col,
+                        type = 'scatter',
+                        colors = crs_get_palette()$grey5,
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b> ', breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+  
+            highlight(
+          on = 'plotly_click',    
+          off = 'plotly_relayout',
+          opacityDim = 1,
+                      dynamic = T,
+              selectize = T,
+              persistent = T,
+          color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4),
+          selected = attrs_selected(line = list(color = crs_get_palette()$yellow5,
+                                                width = 3))
+          ) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Employment Level Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,60)),
+         title = 'Share of Employment Level by Occupation',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 100))
+
+
+```
+
+#### Unemployment Rate
+
+Using Table A13 of the Employment Situation Release, the following graphs plot the unemployment rate for each occupation from January 1, 2003 to `r find_latest_date('LNU04032226')`. `r change_since(start_comp_date, occ_list_unemployment , "normal")`
+
+```{r}
+
+plot_ly(data = file_share_occ %>% filter(vartype == "Unemployment Rate") %>% highlight_key(~breakdown_col, "Select an Occupation "),
+                        x= ~date,
+                        y = ~value,
+                        color = ~breakdown_col,
+                        type = 'scatter',
+                        colors = crs_get_palette()$grey5,
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(value, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Changevalue, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+          highlight(
+          on = 'plotly_click',           
+          off = 'plotly_relayout',         
+          opacityDim = 1,
+              dynamic = T,
+              selectize = T,
+              persistent = T,
+          color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4),
+          selected = attrs_selected(line = list(color = crs_get_palette()$green5,
+                                                width = 3))
+          ) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Employment Level Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 5,
+                      ticksuffix = "%",
+                      range = c(0,30)),
+         title = 'Unemployment Rate by Occupation',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 30))
+
+
+```
+
+#### Data
+
+```{r}
+
+
+file %>% 
+  filter(seriesID %in% comb_list_occ) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### Industry {.tabset}
+
+#### Share of Unemployment
+
+```{r}
+file_share_ind = file %>%
+  filter((as.numeric(substrRight(seriesID,5)) > 32229  & 
+            as.numeric(substrRight(seriesID,5)) < 35182) | 
+           as.numeric(substrRight(seriesID,5)) == 28615) %>%
+
+
+mutate(breakdown_col = sub(".* - ", "", VarName)) %>% 
+  
+  mutate(VarName = gsub(',', '', VarName)) %>%
+            
+              mutate(vartype = ifelse(grepl("Civilian" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Employment Level" ,VarName , fixed = TRUE),
+                                                 "Employment Level", ifelse(grepl("Unemployment Rate" ,VarName , fixed = TRUE),
+                                                                              "Unemployment Rate", "Unemployment Level"))))
+file_share_ind =  file_share_2_arrrangedata_notseas(file_share_ind)
+
+ind_list = file_share_ind %>%
+  filter(vartype == "Unemployment Level") 
+
+ind_list = ind_list$seriesID %>%
+  unique()
+
+ind_list_unemployment = file_share_ind %>%
+  filter(vartype == "Unemployment Rate") 
+
+ind_list_unemployment = ind_list_unemployment$seriesID %>%
+  unique()
+
+comb_list_ind = c(ind_list, ind_list_unemployment)
+
+```
+
+Using Table A14 of the Employment Situation Release, the following graphs plot the share of the Unemployment for each industry from January 1, 2003 to `r find_latest_date('LNU04032229')`. `r change_since(start_comp_date, ind_list , "share")`
+
+```{r}
+
+
+
+
+plot_ly(data = file_share_ind %>% filter(vartype == "Unemployment Level") %>%
+          highlight_key(~breakdown_col, "Select an Industry "),
+                        x= ~date,
+                        y = ~Share,
+                        color = ~breakdown_col,
+                        colors = crs_get_palette()$grey5,
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(Share, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+  
+          highlight(
+          on = 'plotly_click',           off = 'plotly_relayout',
+          opacityDim = 1,
+              dynamic = T,
+              selectize = T,
+              persistent = T,
+          color =  c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4),
+          selected = attrs_selected(line = list(color = crs_get_palette()$yellow5,
+                                                width = 3))
+          ) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Unemployment Level Share <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 10,
+                      ticksuffix = "%",
+                      range = c(0,30)),
+         title = 'Share of Unemployment Level by Industry',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 30))
+
+```
+
+#### Unemployment Rate
+
+Using Table A14 of the Employment Situation Release, the following graphs plot the unemployment rate for each occupation from January 1, 2003 to `r find_latest_date('LNU04032229')`. `r change_since(start_comp_date, ind_list_unemployment , "normal")`
+
+```{r}
+
+
+plot_ly(data = file_share_ind %>% filter(vartype == "Unemployment Rate") %>% highlight_key(~breakdown_col, "Select an Industry"),
+                        x= ~date,
+                        y = ~value,
+                        color = ~breakdown_col,
+                        colors = crs_get_palette()$grey5,
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Share</b>: ', formatC(value, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Changevalue, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        highlight(
+          on = 'plotly_click',           
+          off = 'plotly_relayout',         
+          opacityDim = 1,
+                        dynamic = T,
+              selectize = T,
+              persistent = T,
+          color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4),
+          selected = attrs_selected(line = list(color = crs_get_palette()$green5,
+                                                width = 3))
+          ) %>%
+  
+        layout(xaxis = list(
+             title = '<b>Date</b>'),
+             yaxis = list(title = list(text = '<b> Unemployment Rate <b>', font = list(size = 9)),
+                          tickmode = 'linear',
+                          dtick = 5,
+                          ticksuffix = "%",
+                          range = c(0,45)),
+             title = 'Unemployment Rate by Industry',
+             hoverlabel = list(align = 'left'),
+             tickmode = "linear",
+             showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 45))
+
+
+```
+
+#### Data
+
+```{r}
+
+
+file %>% 
+    filter((as.numeric(substrRight(seriesID,5)) > 32228  & 
+            as.numeric(substrRight(seriesID,5)) < 35182) | 
+           as.numeric(substrRight(seriesID,5)) == 28615) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### Reason for Unemployment {.tabset}
+
+#### Permanent Job Loses v. Completed Temporary Jobs
+
+Using Table A11 of the Employment Situation Release, the following graphs plot the Unemployment Level for Permanent Job Losses versus the Completion of Temporary Jobs from January 1, 2003 to `r find_latest_date('LNS13026638')`. `r change_since(start_comp_date, c('LNS13026638', 'LNS13026637') , "normal")`
+
+```{r}
+
+perm_vcomptemp = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Level</b>',  tickmode = 'linear', dtick = 2000000, ticksuffix = "", range = c(0,10000000)),
+         title = 'Unemployment Level for Permanent Job Losses vs. Completion of Temporary Jobs',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 10000000))
+
+     
+    perm_vcomptemp = addtracecontrol_nopercent(
+                  object = perm_vcomptemp,
+                  varname = "(Seas) Unemployment Level - Permanent Job Losers",
+                  colorfunction = crs_get_palette()$red3,
+                  variable_pub_name = "Permanent Job Losses") 
+    
+        perm_vcomptemp = addtracecontrol_nopercent(
+                  object = perm_vcomptemp,
+                  varname = "(Seas) Unemployment Level - Persons who Completed Temporary Jobs",
+                  colorfunction = crs_get_palette()$red4,
+                  variable_pub_name = "Completed Temporary Jobs") 
+    
+    perm_vcomptemp
+
+
+```
+
+#### Temporary v. Nontemporary Layoff
+
+Using Table A11 of the Employment Situation Release, the following graphs plot the Unemployment Level for Permanent Job Losses versus the Completion of Temporary Jobs from January 1, 2003 to `r find_latest_date('LNS13023653')`. `r change_since(start_comp_date, c('LNS13023653', 'LNS13025699') , "normal")`
+
+```{r}
+
+temp_vs_nontemp = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Level</b>',  tickmode = 'linear', dtick = 2000000, ticksuffix = "", range = c(0,20000000)),
+         title = 'Unemployment Level for Temporary vs. Non-Temporary Layoffs',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 20000000))
+
+     
+    temp_vs_nontemp = addtracecontrol_nopercent(
+                  object = temp_vs_nontemp,
+                  varname = "(Seas) Unemployment Level - Job Losers on Layoff",
+                  colorfunction = crs_get_palette()$orange4,
+                  variable_pub_name = "Temporary Layoff") 
+    
+        temp_vs_nontemp = addtracecontrol_nopercent(
+                  object = temp_vs_nontemp,
+                  varname = "(Seas) Unemployment Level - Job Losers Not on Layoff",
+                  colorfunction = crs_get_palette()$orange6,
+                  variable_pub_name = "Non-Temporary Layoff") 
+    
+    temp_vs_nontemp
+
+```
+
+#### Job Leavers
+
+Using Table A11 of the Employment Situation Release, the following graphs plot the Unemployment Level for Job Leavers from January 1, 2003 to `r find_latest_date('LNS13023705')`. `r change_since(start_comp_date, c('LNS13023705') , "normal")`
+
+```{r}
+
+jobleavers = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Level</b>',  tickmode = 'linear', dtick = 250000, ticksuffix = "", range = c(0,1500000)),
+         title = 'Unemployment Level for Job Leavers',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 1500000))
+
+     
+    jobleavers = addtracecontrol_nopercent(
+                  object = jobleavers,
+                  varname = "(Seas) Unemployment Level - Job Leavers",
+                  colorfunction = crs_get_palette()$yellow5,
+                  variable_pub_name = "Level of Unemployed") 
+    
+    jobleavers
+    
+    rm(jobleavers)
+
+
+```
+
+#### Reentrants
+
+Using Table A11 of the Employment Situation Release, the following graphs plot the Unemployment Level for Labor Force Re-entrants from January 1, 2003 to `r find_latest_date('LNS13023557')`. `r change_since(start_comp_date, c('LNS13023557') , "normal")`
+
+```{r}
+
+reentrants = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Level</b>',  tickmode = 'linear', dtick = 500000, ticksuffix = "", range = c(0,5000000)),
+         title = 'Unemployment Level for Reentrants to Labor Force',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 5000000))
+
+     
+    reentrants = addtracecontrol_nopercent(
+                  object = reentrants,
+                  varname = "(Seas) Unemployment Level - Reentrants to Labor Force",
+                  colorfunction = crs_get_palette()$orange5,
+                  variable_pub_name = "Level of Unemployed") 
+    
+    reentrants
+
+```
+
+#### Unemployed New Entrants
+
+Using Table A11 of the Employment Situation Release, the following graphs plot the Unemployment Level for New Entrants to the Labor Force from January 1, 2003 to `r find_latest_date('LNS13023569')`. `r change_since(start_comp_date, c('LNS13023569') , "normal")`
+
+```{r}
+
+newentrants = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Unemployment Level</b>',  tickmode = 'linear', dtick = 500000, ticksuffix = "", range = c(0,2000000)),
+         title = 'Unemployment Level for New Labor Force Entrants',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 2000000))
+
+     
+    newentrants = addtracecontrol_nopercent(
+                  object = newentrants,
+                  varname = "(Seas) Unemployment Level - New Entrants",
+                  colorfunction = crs_get_palette()$orange5,
+                  variable_pub_name = "Level of Unemployed") 
+    
+    newentrants
+
+```
+
+#### Data
+
+```{r}
+
+
+file %>% 
+  filter(VarName %in% c(
+    "(Seas) Unemployment Level - New Entrants",
+    "(Seas) Unemployment Level - Reentrants to Labor Force",
+    "(Seas) Unemployment Level - Job Leavers",
+    "(Seas) Unemployment Level - Job Losers on Layoff",
+    "(Seas) Unemployment Level - Job Losers Not on Layoff",
+    "(Seas) Unemployment Level - Permanent Job Losers",
+    "(Seas) Unemployment Level - Persons who Completed Temporary Jobs"
+  )) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### Multiple Jobholders, Duration of Unemployment, and Self-Employment {.tabset}
+
+#### Total 
+
+Using Table A9 of the Employment Situation Release, the following graphs plot the Level of Multiple Job Holders from January 1, 2003 to `r find_latest_date('LNS13023569')`. `r change_since(start_comp_date, c('LNS13023569') , "normal")`
+
+```{r}
+
+multiple_jobs = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment Level</b>',  tickmode = 'linear', dtick = 1000000, ticksuffix = "", range = c(0,12000000)),
+         title = 'Multiple Job Holders',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 12000000))
+
+     
+    multiple_jobs = addtracecontrol_nopercent(
+                  object = multiple_jobs,
+                  varname = "(Seas) Multiple Jobholders",
+                  colorfunction = crs_get_palette()$blgray4,
+                  variable_pub_name = "Multiple Job Holders Employment Level") 
+    
+
+    
+    multiple_jobs
+
+```
+
+#### Percent of Employed
+
+Using Table A19 of the Employment Situation Release, the following graphs plot the Percent of Employed with Multiple Jobs from January 1, 2003 to `r find_latest_date('LNS12026620')`. `r change_since(start_comp_date, c('LNS12026620') , "normal")`
+
+```{r}
+
+multiple_jobs_p = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment Level</b>',  tickmode = 'linear', dtick = 2, ticksuffix = "%", range = c(0,10)),
+         title = 'Percent of Employed with Multiple Jobs',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 10))
+
+     
+    multiple_jobs_p = addtracecontrol(
+                  object = multiple_jobs_p,
+                  varname = "(Seas) Multiple Jobholders as a Percent of Employed",
+                  colorfunction = crs_get_palette()$blgray4,
+                  variable_pub_name = "Percent of Employed with Multiple Jobs") 
+    
+
+    
+    multiple_jobs_p
+
+
+```
+
+
+#### Duration of Unemployment
+
+Using Table A12 of the Employment Situation Release, the following graphs plot the Number of Unemployed by length of Unemployment from January 1, 2003 to `r find_latest_date('LNS13008756')`. `r change_since(start_comp_date, c('LNS13008396','LNS13008756','LNS13008876','LNS13008636') , "normal")`
+
+```{r}
+
+file_share_UNlength = file %>%
+  filter(seriesID %in% c('LNS13008396',  
+                         'LNS13008756',
+                         'LNS13008876',
+                         'LNS13008636')) %>%
+
+
+mutate(breakdown_col = sub(".* - ", "", VarName)) %>%
+            
+              mutate(vartype = ifelse(grepl("Civilian" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Employment Level" ,VarName , fixed = TRUE),
+                                                 "Employment Level", ifelse(grepl("Unemployment Rate" ,VarName , fixed = TRUE),
+                                                                              "Unemployment Rate", "Unemployment Level"))))
+file_share_UNlength =  file_share_2_arrrangedata_notseas(file_share_UNlength)
+
+plot_ly(data = file_share_UNlength %>% highlight_key(~breakdown_col, "Select Duration"),
+                        x= ~date,
+                        y = ~value/1000,
+                        color = ~breakdown_col,
+                        colors = crs_get_palette()$grey5,
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Value</b>: ', formatC(value * 1000, big.mark=',', format='g'), '<b>%</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Changevalue, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+        highlight(
+          on = 'plotly_click',
+          off = 'plotly_relayout',
+          opacityDim = 1,
+                        dynamic = T,
+              selectize = T,
+              persistent = T,
+          color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4),
+          selected = attrs_selected(line = list(color = crs_get_palette()$purple5,
+                                                width = 3))
+          ) %>%
+  
+        layout(xaxis = list(
+             title = '<b>Date</b>'),
+             yaxis = list(title = list(text = '<b> Number of Unemployed Workers <b>', font = list(size = 9)),
+                          tickformat = 'digits',
+                          dtick = 2,
+                          ticksuffix = "M",
+                          range = c(0,18)),
+             title = 'Unemployment Levels by Length',
+             hoverlabel = list(align = 'left'),
+             showlegend = FALSE,
+             shapes = get_rec_bars(ymin = 0, ymax = 18))
+
+```
+
+#### Self-Employment 
+
+Using Table A12 of the Employment Situation Release, the following graphs plot the Level of Employment for Incorporated and Unincorporated Self Employed from January 1, 2003 to `r find_latest_date('LNS12027714')`. `r change_since(start_comp_date, c('LNU02048984','LNS12027714') , "normal")`
+
+```{r}
+
+
+incorporated_SE = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment Level</b>',  tickmode = 'linear', dtick = 1000000, ticksuffix = "", range = c(0,15000000)),
+         title = 'Employment Level for Self Employed',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 15000000))
+
+     
+    incorporated_SE = addtracecontrol_nopercent(
+                  object = incorporated_SE,
+                  varname = "(Unadj) Employment Level - Incorporated self employed",
+                  colorfunction = crs_get_palette()$green3,
+                  variable_pub_name = "Self Employment Level - Incorporated") 
+    
+        incorporated_SE = addtracecontrol_nopercent(
+                  object = incorporated_SE,
+                  varname = "(Seas) Employment Level - Unincorporated Self employed",
+                  colorfunction = crs_get_palette()$green5,
+                  variable_pub_name = "Self Employment Level - Unincorporated") 
+
+    
+    incorporated_SE
+
+```
+
+#### Data
+
+```{r}
+
+
+file %>% 
+  filter(VarName %in% c(
+"(Seas) Multiple Jobholders",
+"(Seas) Multiple Jobholders as a Percent of Employed",
+  "(Seas) Number Unemployed for Less than 5 Weeks" ,
+  "(Seas) Number Unemployed for 5-14 Weeks",
+  "(Seas) Number Unemployed for 15-26 Weeks" ,
+  "(Seas) Number Unemployed for 27 Weeks & over",
+  "(Unadj) Employment Level - Total wage and salary, incorporated self employed" ,
+  "(Seas) Employment Level - All industries Self-employed, unincorporated"
+  )) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+### At Work Part Time {.tabset}
+
+#### For Economic Reasons
+
+Using Table A8 of the Employment Situation Release, the following graphs plot the Share of Employment in Part-Time Work by Economic Reason from January 1, 2003 to `r find_latest_date('LNS12032194')`. `r change_since(start_comp_date, c('LNS12032194','LNS12032195','LNS12032196') , "share")`
+
+```{r}
+
+file_share_parttime_economic_nonag = file %>%
+  filter( seriesID %in% c('LNS12032194',
+                          'LNS12032195',
+                          'LNS12032196')) %>%
+
+
+mutate(breakdown_col = sub(".* - ", "", VarName)) %>%
+            
+              mutate(vartype = ifelse(grepl("Civilian" ,VarName , fixed = TRUE), 
+                                 "Civilian Labor Force Level", ifelse(grepl("Employment Level" ,VarName , fixed = TRUE),
+                                                 "Employment Level", ifelse(grepl("Unemployment Rate" ,VarName , fixed = TRUE),
+                                                                              "Unemployment Rate", "Unemployment Level"))))
+
+file_share_parttime_economic_nonag =  file_share_2_arrrangedata_notseas(file_share_parttime_economic_nonag)
+
+plot_ly(data = file_share_parttime_economic_nonag %>% filter(vartype == "Employment Level") %>% highlight_key(~breakdown_col, "Select Reason"),
+                        x= ~date,
+                        y = ~value/1000,
+                        color = ~breakdown_col,
+                        colors = crs_get_palette()$grey5,
+                        type = 'scatter',
+                        mode = 'lines',
+            hoverinfo = "text",
+            text = ~paste0('<b>' , breakdown_col , '</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Value</b>: ', formatC(value, big.mark=',', format='g'), '<b>,000</b>', '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'g'))) %>%
+  
+  
+          highlight(
+          on = 'plotly_click',           off = 'plotly_relayout',
+          opacityDim = 1,
+              dynamic = T,
+              selectize = T,
+              persistent = T,
+          color = c(crs_get_palette()$bluea4,
+                        crs_get_palette()$blueb4,
+                        crs_get_palette()$yellow4,
+                        crs_get_palette()$red4,
+                        crs_get_palette()$green4,
+                        crs_get_palette()$purple4),
+          selected = attrs_selected(line = list(color = crs_get_palette()$yellow5,
+                                                width = 3))
+          ) %>%
+  
+        layout(xaxis = list(
+        title = '<b>Date</b>'),
+         yaxis = list(title = list(text = '<b> Employment Level <b>', font = list(size = 9)),
+                      tickmode = 'linear',
+                      dtick = 1,
+                      ticksuffix = "M",
+                      range = c(0,15)),
+         title = 'Level of Part Time Workers for Non-Economic Reasons',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 15))
+
+```
+
+#### For Noneconomic Reasons
+
+Using Table A8 of the Employment Situation Release, the following graphs plot the Level of Employment in Part-Time Work for Non-Economic Reasons from January 1, 2003 to `r find_latest_date('LNS12005977')`. `r change_since(start_comp_date, c('LNS12005977') , "normal")`
+
+```{r}
+parttime_noneconomic = plot_ly() %>%
+
+
+    layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Employment Level</b>',  tickmode = 'linear', dtick = 2000000, ticksuffix = "", range = c(0,30000000)),
+         title = 'Employment Level of Part Time Workers for Noneconomic Reasons',
+         hoverlabel = list(align = 'left'),
+         tickmode = "linear",
+         showlegend = FALSE,
+         shapes = get_rec_bars(ymin = 0, ymax = 30000000))
+
+     
+    parttime_noneconomic = addtracecontrol_nopercent(
+                  object = parttime_noneconomic,
+                  varname = "(Seas) Number At Work 1 to 34 Hours, Usually Work Part Time Noneconomic Reasons",
+                  colorfunction = crs_get_palette()$olive4,
+                  variable_pub_name = "Part Time Workers - Noneconomic Reasons") 
+    
+parttime_noneconomic
+
+```
+
+#### Data
+
+```{r}
+
+
+file %>% 
+  filter(VarName %in% c(
+  "(Seas) Employment Level - Part-Time for Economic Reasons, All Industries" ,
+  "(Seas) Employment Level - Part-Time for Economic Reasons, Slack Work or Business Conditions, All Industries" ,
+  "(Seas) Employment Level - Part-Time for Economic Reasons, Could Only Find Part-Time Work, All Industries" ,
+  "(Seas) Number At Work 1-34 Hours, Usually Work Part Time Noneconomic Reasons" 
+  )) %>%
+  select(year, seriesID, value, VarName, date) %>%
+  datatable(extensions = 'Buttons',
+            rownames = FALSE,
+            colnames = c("Year", "Series ID", "Value", "Series Name", "Date"),
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+
+## CES-Specific
+
+This section of the report provides detailed information on employment across the various sectors that make up the U.S. economy. Almost every visual in this section displays the proportion of employment in the current month to employment in January 2003. So for example, if the employment level for January 2015 is 100,000 and the employment level for January 2003 is 50,000, the value for January 2015 will be coded as (100,000/50,000)*100 = 200% (we multiply by 100 to obtain the percent value). We use this metric to eliminate scaling issues that occur when comparing employment trends across sectors of various sizes. For example, the Education and Health Services sector employed 24.8 million individuals in December 2022. The Mining and Logging sector employed 628,000 individuals in that same month. Visually comparing values that are this different over an extended period of time would be difficult. The "Percent of January 2003 Employment" variable controls for this by compressing the interval of possible values, thus making it easier to compare trends in employment for different sectors The useful thing about these charts is that the trend line for any given sector will look exactly like the trend line in <i>employment</i> for that sector, but on a much more compressed scale, thus making trends across sectors easier to compare. 
+
+Because we use the metric that we do, it is important to note that the purpose of these visuals is to compare <i>trends</i> in employment, not overall <i>levels</i> of employment. The line for one sector in a chart may be higher than that of another sector in the chart, but that does not mean that the first sector has a higher <i>level</i> of employment. It simply means employment for the first sector is growing at a faster clip relative to January 2003 than employment in the second sector. This is where these charts are useful. They can tell us which sectors are growth sectors and which are not. We can also zoom in on specific time periods, like the recovery from the COVID-19 Pandemic, to see if certain sectors are recovering better than others. 
+We move now to explaining how to interact with the charts in this section. Every chart was made using the `plotly` package in R. This means that they are all interactive charts. Here are some of the main ways to interact with each of these charts: 
+
+* When you hover over a specific point on a line, you will notice that there is a box containing a lot of useful information. 
+  + The "Expected Employment" value contained in these boxes reflects the employment value that would be expected based on the trends in employment for that specific sector between January 2015 and January 2020. We regress the date variable against the employment level and use the resulting regression coefficient for the date variable to establish the expected employment values. 
+* You can zoom-in on specific parts of the visual by clicking and dragging your mouse. 
+* You can select specific sectors of interest by:
+  + Clicking on the lines you are interested in, or
+  + Searching for them in the box above the figure. 
+* When selecting industries, you can vary the color of the selected lines by clicking on the color box below "Brush color" in the upper-left-hand corner before you select each individual industry. 
+* To undo anything listed above, simply double-click anywhere in the `plotly` chart. 
+
+### Overall Employment {.tabset}
+
+In the tabs below, we display overall employment for the U.S. economy, the month over month change in employment for the last 12 months, and the current national employment level as a percent of the national employment level in January 2003. The month over month change in employment reflects the difference in employment from the prior month. This is number that is typically referred to as "job growth." See the text under the [CES-Specific] header for a full description of the "percent of January 2003 employment" metric.  
+
+#### Total Nonfarm Employment
+
+```{r}
+#Data
+file2 <- file %>% 
+  filter(VarName == '(Seas) Total nonfarm employment') %>% 
+  data_ces_clean(.,
+                 groupflag = FALSE)
+
+#Plot
+totalemploymentplot <- file2 %>% 
+  plot_ly(x = ~date,
+          y = ~value,
+          hoverinfo = 'text',
+          text = ~paste0('<b>Total Nonfarm Employment</b>','<br>',
+                         '(Seasonally Adjusted)','<br>',
+                         '<b>Date</b>: ', format(date,'%B %Y'),'<br>',
+                         '<b>Value</b>: ', formatC(value,big.mark=',', format='d'), '<br>',
+                         '<b>Change</b>: ', formatC(Change, flag = '+', big.mark = ',', format = 'd')),
+          line = list(color = crs_get_palette()$red4)) %>% 
+  add_lines() %>% 
+  layout(xaxis = list(title = '<b>Date</b>'),
+         yaxis = list(title = '<b>Total Nonfarm Employment</b>'),
+         hoverlabel = list(align = 'left'))
+
+totalemploymentplot
+```
+
+#### Month Over Month Change in Employment
+
+```{r}
+#Data for this chart is in the initialization chunk
+
+#Plot
+totnonfarm %>% 
+  filter(date >= max(date) %m-% months(11)) %>% 
+  plot_ly(x = ~date,
+          y = ~Change,
+          hoverinfo = 'text',
+          hovertext = ~paste0('<b>Change in Total Nonfarm Employment</b>','<br>',
+                          '(Seasonally Adjusted)','<br>',
+                          '<b>Date</b>: ',format(date,'%B %Y'),'<br>',
+                          '<b>Change</b>: ',formatC(Change, flag = '+', big.mark = ',', format = 'd')),
+          type = 'bar',
+          marker = list(color = crs_get_palette()$red4)) %>% 
+  layout(yaxis = list(showticklabels = F,
+                      title = '',
+                      showgrid = F),
+         xaxis = list(title = '<b>Date</b>'),
+         hoverlabel = list(align = 'left'))
+
+```
+
+#### Percent of January 2003 Employment
+
+```{r}
+plot_ly(file2,
+        x = ~date,
+        y = ~PropFirst,
+        hoverinfo = 'text',
+            hovertext = ~paste0('<b>',VarName,'</b>','<br>',
+                                '(Seasonally Adjusted)','<br>',
+                                '<b>ID</b>: ',seriesID,'<br>',
+                                '<b>Date</b>: ',format(date,'%B %Y'),'<br>',
+                                '<b>Percent of Jan 2003 Employment</b>: ', round(PropFirst*100,1),'%','<br>',
+                                '<b>Actual Employment</b>: ',formatC(value,big.mark=',', format='d'),'<br>',
+                                '<b>Expected Employment</b>: ',formatC(expected,big.mark=',', format='d'),'<br>',
+                                '<b>Actual - Expected</b>: ',formatC(value - expected,big.mark=',', format='d', flag = '+'),'<br>',
+                                '<b>Monthly Change</b>: ',formatC(Change,big.mark=',', flag = '+',format='d'))) %>% 
+  add_lines() %>% 
+  layout(yaxis = list(title = '<b>Percent of January 2003 Employment</b>',
+                      tickformat = '.0%'),
+         hoverlabel = list(align='left'),
+         xaxis = list(title = '<b>Date</b>'),
+         shapes = get_rec_bars(ymin = min(file2$PropFirst) - (abs(min(file2$PropFirst))*0.2),
+                                   ymax = max(file2$PropFirst) + (abs(min(file2$PropFirst))*0.2)))
+
+```
+
+### All Super-Sectors {.tabset}
+
+The [North American Industry Classification System (NAICS)](https://www.bls.gov/bls/naics.htm) is the system that is used to assign business establishments to a specific sector (also known as <i>industry</i>). In this document, we first analyze the 11 "[super-sectors](https://www.bls.gov/bls/naics_aggregation.htm)" in the NAICS. These are the highest-level sectors in the classification system and their employment levels are directly comparable. To avoid issues of scale, we compare the super-sectors by looking at the percent of January 2003 employment for each of these sectors over time. 
+
+#### Percent of January 2003 Employment
+
+```{r}
+#Data 
+cessub <- ces %>% 
+  filter(str_count(seriesID,'0') %in% c(8,9) | 
+           seriesID == 'CES6500000001' | 
+           seriesID == 'CES5500000001') %>% 
+  filter(str_detect(seriesID,'^CES[1-9]')) %>% 
+  data_ces_clean(.,
+                 groupflag = TRUE,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(cessub,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Super-Sector')
+
+```
+
+#### Data
+
+```{r}
+cessub %>% 
+  data_interactive(.)
+
+rm(cessub)
+```
+
+### All Sub-Sectors
+
+Within each of the super-sectors, the [NAICS](https://www.bls.gov/bls/naics.htm) also classifies business establishments by their sub-sector. Depending on the size and complexity of a given super-sector, this may involve multiple layers of sub-sectors within the super-sector. In this document, we do not highlight every single sub-sector within each super-sector. However, we do cover most. For all super-sectors we divide the sub-sectors by those that we consider to be "overall" and those we consider to be "detailed." These classifications simply refer to the level of the sub-sector. "Overall" sectors are at a higher level in the classification system then the "detailed" sectors.   
+
+#### Government {.tabset}
+
+##### Overall
+
+```{r}
+#Data 
+cesgov <- ces %>% 
+   filter(str_detect(seriesID,'^CES90')) %>% 
+  filter(seriesID %in% c('CES9091000001',
+                         'CES9092000001',
+                         'CES9093000001')) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(cesgov,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Government Sub-Sector')
+
+```
+
+##### Detailed
+
+```{r}
+#Data
+cesgovdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES90')) %>% 
+  filter(!seriesID %in% c('CES9000000001',
+                         'CES9091000001',
+                         'CES9092000001',
+                         'CES9093000001')) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(cesgovdet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Government Detailed Sub-Sector')
+
+```
+
+##### Data
+
+```{r}
+rbind(cesgov,
+      cesgovdet) %>% 
+  data_interactive(.)
+
+rm(cesgov,cesgovdet)
+```
+
+#### Health and Education {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+phlthed <- ces %>% 
+  filter(str_detect(seriesID,'^CES65'),
+         str_count(seriesID,'0')==5) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(phlthed,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Health and Education Sub-Sector')
+
+```
+
+##### Healthcare Detailed
+
+```{r}
+#Data
+hlthdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES65'),
+         str_count(seriesID,'0')==4,
+         !seriesID %in% c('CES6562000101',
+                          'CES6562400001')) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(hlthdet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Healthcare Sub-Sector')
+
+```
+
+##### Social Assistance Detailed
+
+```{r}
+#Data 
+hlthsubdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES6562(1|3)'),
+         str_count(seriesID,'0')==3) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(hlthsubdet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Social Assistance Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(phlthed,
+      hlthdet,
+      hlthsubdet) %>% 
+  data_interactive(.)
+
+rm(phlthed,hlthdet,hlthsubdet)
+```
+
+#### Manufacturing {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+mnfdurnon <- ces %>% 
+  filter(str_detect(seriesID,'^CES310|^CES320')) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(mnfdurnon,
+                   yvar = "PropFirst",
+                   ytitle = "Percent of January 2003 Employment",
+                   tckformat = ".0%",
+                   id = "Manufacturing Sub-Sector")
+
+
+```
+
+##### Durable Goods Detailed
+
+```{r}
+#Data 
+mnfdurdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES31')) %>% 
+  filter(str_count(seriesID,'0')==4) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(mnfdurdet,
+                   yvar = "PropFirst",
+                   ytitle = "Percent of January 2003 Employment",
+                   tckformat = ".0%",
+                   id = "Durable Goods Sub-Sector")
+
+```
+
+##### Non-Durable Goods Detailed
+
+```{r}
+#Data 
+mnfdurdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES32')) %>% 
+  filter(str_count(seriesID,'0')==4) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(mnfdurdet,
+                   yvar = "PropFirst",
+                   ytitle = "Percent of January 2003 Employment",
+                   tckformat = ".0%",
+                   id = "Non-Durable Goods Sub-Sector")
+
+```
+
+##### Data
+
+```{r}
+rbind(mnfdurnon,mnfdurdet,mnfdurdet) %>% 
+  data_interactive(.)
+
+rm(mnfdurnon,mnfdurdet,mnfdurdet)
+```
+
+#### Trade, Transportation, and Utilities (TTU) {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+trd <- ces %>% 
+  filter((str_detect(seriesID,'^CES4') &
+            str_count(seriesID,'0') > 4 &
+            str_count(seriesID,'0') < 8) | 
+           seriesID == 'CES4422000001') %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Output
+plot_ces_spaghetti(trd,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'TTU Sub-Sector')
+```
+
+##### Retail Trade Detailed
+
+```{r}
+#Data
+trdret <- ces %>% 
+  filter(str_detect(seriesID,'^CES42'),
+         str_count(seriesID,'0')==4) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(trdret,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Retail Trade Sub-Sector')
+```
+
+##### Transportation and Warehousing Detailed 
+
+```{r}
+#Data
+trnswhs <- ces %>% 
+  filter(str_detect(seriesID,'^CES43')) %>%
+  filter(seriesID != 'CES4300000001') %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(trnswhs,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Transportation and Warehousing Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(trd,trdret,trnswhs) %>% 
+  data_interactive(.)
+
+rm(trd,trdret,trnswhs)
+```
+
+#### Construction {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+cons <- ces %>% 
+  filter(str_detect(seriesID,'^CES2'),
+         str_count(seriesID,'0')==5) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(cons,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Construction Sub-Sector')
+```
+
+##### Detailed
+
+```{r}
+#Data
+consdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES2'),
+         str_count(seriesID,'0')==4) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(consdet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Construction Detailed Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(cons,consdet) %>% 
+  data_interactive(.)
+
+rm(cons,consdet)
+```
+
+#### Leisure and Hospitality {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+lhs <- ces %>% 
+  filter(str_detect(seriesID,'^CES7'),
+         str_count(seriesID,'0')==6) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(lhs,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Leisure and Hospitality Sub-Sector')
+```
+
+##### Detailed
+
+```{r}
+#Data
+lhsdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES7'),
+         str_count(seriesID,'0')==5) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(lhsdet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Leisure and Hospitality Detailed Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(lhs,lhsdet) %>% 
+  data_interactive(.)
+
+rm(lhs,lhsdet)
+```
+
+#### Mining and Logging {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+min <- ces %>% 
+  filter(seriesID %in% c('CES1011330001',
+                         'CES1021000001')) %>% 
+   data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+  
+#Plot
+plot_ces_spaghetti(min,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Mining and Logging Sub-Sector')
+```
+
+##### Detailed
+
+```{r}
+#Data
+mindet <- ces %>% 
+  filter(str_detect(seriesID,'^CES1')) %>% 
+  filter(!seriesID %in% c('CES1011330001',
+                         'CES1021000001',
+                         'CES1000000001')) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(mindet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Mining and Logging Detailed Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(min,mindet) %>% 
+  data_interactive(.)
+
+rm(min,mindet)
+```
+
+#### Professional and Business Services {.tabset}
+
+##### Overall 
+
+```{r}
+#Data
+bus <- ces %>% 
+  filter(str_detect(seriesID,'^CES6'),
+         str_count(seriesID,'0') == 6) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(bus,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Professional and Business Services Sub-Sector')
+```
+
+##### Professional, Scientific, and Technical Services Detailed
+
+```{r}
+#Data
+pst <- ces %>% 
+  filter(str_detect(seriesID,'^CES6054'),
+         seriesID != 'CES6054000001') %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(pst,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Professional, Scientific, and Technical Services Sub-Sector')
+```
+
+##### Administrative and Support and Waste Management and Remediation Services Detailed
+
+```{r}
+#Data
+asw <- ces %>% 
+  filter(str_detect(seriesID,'^CES6056'),
+         str_count(seriesID,'0')==5) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(asw,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Administrative and Support and Waste Management and Remediation Services Sub-Sector')
+```
+
+##### Administrative and Support Services Detailed
+
+```{r}
+#Data
+aswdet <- ces %>% 
+  filter(str_detect(seriesID,'^CES6056'),
+         str_count(seriesID,'0')==4) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst')
+
+#Plot
+plot_ces_spaghetti(aswdet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Administrative and Support Services Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(bus,pst,asw,aswdet) %>% 
+  data_interactive(.)
+
+rm(bus,pst,asw,aswdet)
+```
+
+#### Information {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+inf <- ces %>% 
+  filter(str_detect(seriesID,'^CES505')) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(inf,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Information Sub-Sector')
+```
+
+##### Data
+
+```{r}
+inf %>% 
+  data_interactive(.)
+
+rm(inf)
+```
+
+#### Financial Activities {.tabset}
+
+##### Overall
+
+```{r}
+#Data
+fin <- ces %>% 
+  filter(str_detect(seriesID,'^CES55'),
+         str_count(seriesID,'0')==5) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(fin,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Financial Activities Sub-Sector')
+```
+
+##### Detailed
+
+```{r}
+#Data
+findet <- ces %>% 
+  filter(str_detect(seriesID,'^CES55'),
+         str_count(seriesID,'0')==4) %>% 
+  data_ces_clean(.,
+                 groupflag = T,
+                 groupvar = 'VarName',
+                 outputvar = 'propfirst') 
+
+#Plot
+plot_ces_spaghetti(findet,
+                   yvar = 'PropFirst',
+                   ytitle = 'Percent of January 2003 Employment',
+                   tckformat = '.0%',
+                   id = 'Financial Activities Detailed Sub-Sector')
+```
+
+##### Data
+
+```{r}
+rbind(fin,findet) %>% 
+  data_interactive(.)
+
+rm(fin,findet)
+```
+
+::: {.tocify-extend-page data-unique="tocify-extend-page" style="height: 0;"}
+:::
+
+
+
+## Forecasting 
+
+This section provides rough forecasts for most CPS series to predict employment and labor trends based on pre-COVID-19 pandemic data. Forecasts are trained using data from January 2010 to December 2019 and predict forecasts using the [forecast](https://www.rdocumentation.org/packages/forecast/versions/8.21.1) package and the [auto.arima](https://www.rdocumentation.org/packages/forecast/versions/8.21.1/topics/auto.arima)s function. The auto.arima() function selects a best fit model for the series which is then fed into the forecast function to predict levels from January 2020 until today.
+
+### Forecasts:
+
+* Post COVID using 2010 to 2019 training data
+* Post COVID using 2003 to 2019 training data
+* Post Recession using 2003 to 2007 training data (some series did not have any data available between 2003 and 2007)
+* Real refers to the reported BLS numbers
+
+### Included Series and Forecasts:
+
+* Some series are not shown with in the plot options, these series did not produce a reliable model using the auto.arima() function and the results were accordingly filtered out. Some series that did not produce any reliable forecasts, this entire series were filtered out. In October 2023, there were 50 such series.
+
+### Notes:
+
+* Unadjusted series are instructed to use a seasonal model to forecast. Seasonally adjusted series are permitted to use seasonal models but often select less complex forecasting models. For example, many models find that straight lines best model trends in data.
+
+* The unadjusted series produce the most interesting forecasts as the *common* seasonal variances are plotted onto the post COVID years.
+
+
+* A few series produce questionable forecasts. For example, the forecast for seasonally adjusted unemployment rate predicts that should COVID-19 have not occurred the current national unemployment rate in August 2023 would have been ~2.5%. While this forecast is one example of unlikely forecasts, it should be noted that in August 2023 (on the real trajectory), 11 states had unemployment rates at or below 2.5%.
+
+Instructions:
+
+1. At default, all series and forecasts are shown. Whenever more than one series is shown the plot is filled with a confusing mess.
+
+2. Using the search bar, select or search for preferred series.
+
+3. To change to a different series, backspace or click and delete the current forecast before adding a new series to the search bar.
+
+
+### Plot
+
+```{r}
+
+#------------------------------------------------------------------------------------------
+# selection of variable -------------------------------------------------------------------
+#------------------------------------------------------------------------------------------
+
+total_forecast_file = readr::read_csv("Data/total_forecast_file.csv")
+
+file_forecast = SharedData$new(total_forecast_file %>%
+                                 arrange(date))
+
+## sets variable of choice as "variableofchoice"
+
+row1 = crosstalk::filter_select("VarName",
+              "Select a Variable:",
+              file_forecast,
+              ~ VarName)
+
+row2 = crosstalk::filter_select("expected",
+              "Select a Forecast(s):",
+              file_forecast,
+              ~ expected)
+
+# plot ---------------------------------------------------------------------------
+fig =
+  
+  plot_ly(file_forecast,
+        x = ~date,
+        y = ~value * 1000,
+        color = ~expected, 
+        type = 'scatter',
+        mode = 'lines',
+        textposition = "auto",
+        hoverinfo = "text",
+        hovertext = ~ifelse( grepl("Rate", VarName),
+                             
+                   paste0("<b>", substr(VarName, 1, 25), "..", "<b>", "<br>",
+                           round(value, 0), " %" , "<br>",
+                           format(date, "%B %Y"), "<br>",
+                           expected),
+                     
+          
+                   paste0("<b>", substr(VarName, 1, 25), "..", "<b>", "<br>",
+                                   round(value/1000, 3), " million" , "<br>",
+                                   format(date, "%B %Y"), "<br>",
+                                   expected)
+          
+          
+                            )) %>%
+  
+  layout(xaxis = list(title = list(text = "<b> Year <b>",font = list(size = 12))),
+         yaxis = list(title = list(text = "<b> Value <b>",font = list(size = 12))))
+                      
+
+  
+bscols(row1, row2, fig, widths = 14)
+
+
+```
+
+
+
+
